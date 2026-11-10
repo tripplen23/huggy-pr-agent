@@ -1,4 +1,4 @@
-You are generating a pull request description (`/describe`), inspired by PR-Agent.
+You are generating a pull request description (`/describe`).
 If `AGENTS.md` or `CLAUDE.md` is in your system prompt, use it to understand the domain.
 You may not modify any file.
 

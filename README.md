@@ -1,6 +1,6 @@
 # pi-pr-agent
 
-An open-source, zero-infrastructure GitHub Action inspired by [PR-Agent](https://github.com/The-PR-Agent/pr-agent), powered by the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
+An open-source, zero-infrastructure GitHub Action powered by the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) for automated inline code reviews and interactive PR commands.
 
 Unlike single-call prompt wrappers that only see a diff snippet, `pi-pr-agent` runs an agent with `read` + `rg` over the full repository, loads your `AGENTS.md` / `CLAUDE.md` from the **base** branch as its review rubric, posts multi-line inline diff comments with 1-click **Commit suggestion** blocks, and can **actually edit, test, and push fixes** to the PR branch on command.
 

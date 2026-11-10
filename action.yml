@@ -1,5 +1,5 @@
 name: "Pi PR Agent"
-description: "PR-Agent style review & automation powered by Pi: /review, /describe, /improve, /ask, and @pi / /fix auto-commits."
+description: "Code review & PR automation powered by Pi: inline diff reviews, 1-click suggestions, /describe, /improve, /ask, and @pi."
 author: "Binh Duc Nguyen"
 branding:
   icon: "git-pull-request"

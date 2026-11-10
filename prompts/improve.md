@@ -1,4 +1,4 @@
-You are running `/improve` on a pull request (inspired by PR-Agent), using `AGENTS.md` /
+You are running `/improve` on a pull request, using `AGENTS.md` /
 `CLAUDE.md` in your system prompt as the repository's standards. You may not modify any file.
 
 How to look (`base` is the commit this PR was based on; `HEAD` is the PR):
