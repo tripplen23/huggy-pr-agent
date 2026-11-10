@@ -1,0 +1,15 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run unit tests and validate action.yml
+        run: |
+          python3 tests/test_post_review.py -v
+          python3 -c "import yaml; yaml.safe_load(open('action.yml'))"

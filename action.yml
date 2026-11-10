@@ -1,0 +1,432 @@
+name: "Pi PR Agent"
+description: "PR-Agent style review & automation powered by Pi: /review, /describe, /improve, /ask, and @pi / /fix auto-commits."
+author: "Binh Duc Nguyen"
+branding:
+  icon: "git-pull-request"
+  color: "orange"
+
+inputs:
+  mode:
+    description: "What to run: 'auto' (review on pull_request, slash/@pi commands on comments), 'review', or 'comment'."
+    required: false
+    default: "auto"
+  api_key:
+    description: "API key for the chosen model provider (e.g. OpenCode Go key, OpenRouter key)."
+    required: true
+  api_key_env:
+    description: "Environment variable name Pi reads for the provider API key."
+    required: false
+    default: "OPENCODE_API_KEY"
+  model:
+    description: "Pi model identifier (`provider/model`)."
+    required: false
+    default: "opencode-go/deepseek-v4.1-flash"
+  pi_version:
+    description: "Version of @earendil-works/pi-coding-agent to install."
+    required: false
+    default: "1.5.0"
+  rubric_file:
+    description: "Context file read from the base branch as the review/fix rubric (falls back to CLAUDE.md if absent)."
+    required: false
+    default: "AGENTS.md"
+  extra_instructions:
+    description: "Optional extra instructions appended to the prompt."
+    required: false
+    default: ""
+  verify_cmd:
+    description: "Shell command run after a @pi / /fix edit before committing and pushing (e.g. 'pnpm typecheck && pnpm lint && pnpm test')."
+    required: false
+    default: ""
+  guarded_paths:
+    description: "Space-separated paths that a @pi / /fix run is not allowed to stage or push."
+    required: false
+    default: ".github .woodpecker Dockerfile docker-entrypoint.sh package.json pnpm-lock.yaml pnpm-workspace.yaml Cargo.lock go.mod go.sum migrations"
+  github_token:
+    description: "GitHub token used to post reviews/comments and push @pi fixes."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: "composite"
+  steps:
+    # -------------------------------------------------------------------------
+    # AUTOMATIC PR REVIEW (pull_request event)
+    # -------------------------------------------------------------------------
+    - name: Checkout PR merge ref (review)
+      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2
+        token: ${{ inputs.github_token }}
+
+    - name: Resolve base branch, rubric and review brief
+      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      shell: bash
+      env:
+        TARGET: ${{ github.event.pull_request.base.ref }}
+        PR: ${{ github.event.pull_request.number }}
+        RUBRIC_FILE: ${{ inputs.rubric_file }}
+        EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
+          git branch -f base "HEAD^1"
+        else
+          git fetch --no-tags --depth=100 origin \
+            "+refs/heads/$TARGET:refs/remotes/base" "+refs/pull/$PR/head:refs/remotes/pr-head"
+          git checkout -q refs/remotes/pr-head
+          mb=$(git merge-base refs/remotes/base refs/remotes/pr-head 2>/dev/null || true)
+          if [ -z "$mb" ]; then
+            echo "no merge base within 100 commits; refusing to review an inverted diff" >&2
+            exit 1
+          fi
+          git branch -f base "$mb"
+        fi
+        echo "base = $(git rev-parse --short base)"
+
+        if git cat-file -e "base:$RUBRIC_FILE" 2>/dev/null; then
+          git show "base:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
+        elif git cat-file -e "base:CLAUDE.md" 2>/dev/null; then
+          git show "base:CLAUDE.md" > "$RUNNER_TEMP/rubric.md"
+        else
+          : > "$RUNNER_TEMP/rubric.md"
+        fi
+
+        if git cat-file -e "base:.github/pi-review-prompt.md" 2>/dev/null; then
+          git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief.md"
+        else
+          cp "$ACTION_PATH/prompts/review.md" "$RUNNER_TEMP/brief.md"
+        fi
+        if [ -n "$EXTRA_INSTRUCTIONS" ]; then
+          printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief.md"
+        fi
+
+    - name: Run Pi (review)
+      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      shell: bash
+      env:
+        PI_API_KEY: ${{ inputs.api_key }}
+        PI_API_KEY_ENV: ${{ inputs.api_key_env }}
+        PI_MODEL: ${{ inputs.model }}
+        PI_VERSION: ${{ inputs.pi_version }}
+      run: |
+        set -euo pipefail
+        [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
+        export "$PI_API_KEY_ENV=$PI_API_KEY"
+
+        for attempt in 1 2 3; do
+          npm i -g --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
+          echo "npm install failed (attempt $attempt)" >&2
+          sleep 20
+        done
+        command -v rg > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep; }
+
+        sys_args=()
+        if [ -s "$RUNNER_TEMP/rubric.md" ]; then
+          sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
+        fi
+
+        timeout 900 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+          --model "$PI_MODEL" \
+          --tools read,bash \
+          --no-context-files \
+          --no-approve --no-session \
+          "${sys_args[@]}" > review-raw.md
+
+        perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g' review-raw.md > review.md
+        echo "bytes: $(wc -c < review.md)"
+
+    - name: Publish inline review and sticky summary
+      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        python3 "$ACTION_PATH/scripts/post_review.py"
+
+    - name: Replace a stale verdict when review fails
+      if: failure() && ((inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request'))
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        auth="Authorization: Bearer $GH_TOKEN"
+        api="https://api.github.com/repos/$REPO/issues"
+        marker='<!-- pi-review -->'
+        body=$(printf '%s\n## Review by Pi\n\nThis run did not finish, so any verdict above is from an older commit. The log says why: %s/%s/actions/runs/%s' \
+          "$marker" "${{ github.server_url }}" "$REPO" "${{ github.run_id }}")
+        payload=$(jq -n --arg b "$body" '{body: $b}')
+        existing=$(curl -fsSL -H "$auth" "$api/$PR/comments?per_page=100" \
+          | jq -r --arg m "$marker" 'first(.[] | select(.body | startswith($m)) | .id) // empty')
+        if [ -n "$existing" ]; then
+          curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            "$api/comments/$existing" -d "$payload" > /dev/null
+        fi
+
+    # -------------------------------------------------------------------------
+    # INTERACTIVE PR COMMANDS (/review, /describe, /improve, /ask, /fix, @pi)
+    # -------------------------------------------------------------------------
+    - name: Parse command and check out PR branch
+      id: prepare
+      if: (inputs.mode == 'fix' || inputs.mode == 'comment') || (inputs.mode == 'auto' && (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment'))
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        COMMENT_ID: ${{ github.event.comment.id }}
+        THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
+      run: |
+        set -euo pipefail
+        api="https://api.github.com/repos/$REPO"
+        auth="Authorization: Bearer $GH_TOKEN"
+
+        request=$(printf '%s\n' "$COMMENT_BODY" \
+          | sed 's/^[[:space:]]*//' | grep -v '^>' | grep -v '^[[:space:]]*$' \
+          | head -n 1 || true)
+
+        # Normalize `@pi /cmd` -> `/cmd` while keeping `@pi <instruction>` as `fix`.
+        stripped=$(printf '%s' "$request" | sed -E 's/^(@pi:?|\/pi)\s+//')
+        cmd=""
+        case "$request" in
+          '/review'*|'@pi /review'*)     cmd="review" ;;
+          '/describe'*|'@pi /describe'*) cmd="describe" ;;
+          '/improve'*|'@pi /improve'*)   cmd="improve" ;;
+          '/ask '*|'@pi /ask '*)         cmd="ask" ;;
+          '/fix '*|'@pi '*|'@pi:'*|'/pi '*|'pi '*) cmd="fix" ;;
+          *) echo "Not a Pi command; doing nothing."; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+        esac
+        echo "go=true" >> "$GITHUB_OUTPUT"
+        echo "cmd=$cmd" >> "$GITHUB_OUTPUT"
+        printf '%s\n' "$stripped" > "$RUNNER_TEMP/request.txt"
+
+        if [ -n "$THREAD" ]; then
+          react="$api/pulls/comments/$COMMENT_ID/reactions"
+        else
+          react="$api/issues/comments/$COMMENT_ID/reactions"
+        fi
+        curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
+          "$react" -d '{"content":"eyes"}' > /dev/null \
+          || echo "could not add reaction (cosmetic); carrying on."
+
+        read -r branch base cross < <(curl -fsSL -H "$auth" "$api/pulls/$PR" \
+          | jq -r '"\(.head.ref) \(.base.ref) \(.head.repo.full_name != .base.repo.full_name)"')
+        : "${branch:?could not read the PR branch}"
+        if [ "$cross" = "true" ] && [ "$cmd" = "fix" ]; then
+          curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
+            "$api/issues/$PR/comments" -d '{"body":"I cannot push to a fork branch with this token. Run `pi` on the branch locally, or open the PR from a branch in this repo."}' > /dev/null
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git init -q .
+        git fetch -q --no-tags "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
+          "+refs/pull/$PR/head:refs/heads/pr-head" "+refs/heads/$base:refs/heads/base"
+        git checkout -q pr-head
+
+    - name: Run Pi (command)
+      id: fix
+      if: steps.prepare.outputs.go == 'true'
+      shell: bash
+      env:
+        PI_API_KEY: ${{ inputs.api_key }}
+        PI_API_KEY_ENV: ${{ inputs.api_key_env }}
+        PI_MODEL: ${{ inputs.model }}
+        PI_VERSION: ${{ inputs.pi_version }}
+        RUBRIC_FILE: ${{ inputs.rubric_file }}
+        EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        CMD: ${{ steps.prepare.outputs.cmd }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
+        export "$PI_API_KEY_ENV=$PI_API_KEY"
+
+        printf '%s\n' "$COMMENT_BODY" > .pi-fix-request.md
+
+        if git cat-file -e "base:$RUBRIC_FILE" 2>/dev/null; then
+          git show "base:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
+        elif git cat-file -e "base:CLAUDE.md" 2>/dev/null; then
+          git show "base:CLAUDE.md" > "$RUNNER_TEMP/rubric.md"
+        else
+          : > "$RUNNER_TEMP/rubric.md"
+        fi
+
+        case "$CMD" in
+          review)   cp "$ACTION_PATH/prompts/review.md" "$RUNNER_TEMP/brief.md" ;;
+          describe) cp "$ACTION_PATH/prompts/describe.md" "$RUNNER_TEMP/brief.md" ;;
+          improve)  cp "$ACTION_PATH/prompts/improve.md" "$RUNNER_TEMP/brief.md" ;;
+          ask)      cp "$ACTION_PATH/prompts/ask.md" "$RUNNER_TEMP/brief.md" ;;
+          fix)
+            if git cat-file -e "base:.github/pi-fix-prompt.md" 2>/dev/null; then
+              git show "base:.github/pi-fix-prompt.md" > "$RUNNER_TEMP/brief.md"
+            else
+              cp "$ACTION_PATH/prompts/fix.md" "$RUNNER_TEMP/brief.md"
+            fi
+            ;;
+        esac
+        if [ -n "$EXTRA_INSTRUCTIONS" ]; then
+          printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief.md"
+        fi
+
+        for attempt in 1 2 3; do
+          npm i -g --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
+          echo "npm install failed (attempt $attempt)" >&2
+          sleep 20
+        done
+        command -v rg > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep; }
+
+        sys_args=()
+        if [ -s "$RUNNER_TEMP/rubric.md" ]; then
+          sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
+        fi
+
+        tools="read,bash"
+        if [ "$CMD" = "fix" ]; then
+          tools="read,bash,edit,write"
+        fi
+
+        timeout 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+          --model "$PI_MODEL" \
+          --tools "$tools" \
+          --no-context-files \
+          --no-approve --no-session \
+          "${sys_args[@]}" | tee .pi-fix-reply.md
+
+        perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g' .pi-fix-reply.md > "$RUNNER_TEMP/reply.md"
+        cp "$RUNNER_TEMP/reply.md" review.md
+        rm -f .pi-fix-reply.md .pi-fix-request.md
+        if [ "$CMD" = "fix" ] && [ -n "$(git status --porcelain)" ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Verify fix
+      if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != ''
+      shell: bash
+      env:
+        VERIFY_CMD: ${{ inputs.verify_cmd }}
+      run: |
+        set -euo pipefail
+        eval "$VERIFY_CMD"
+
+    - name: Publish command result
+      if: success() && steps.prepare.outputs.go == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+        COMMENT_ID: ${{ github.event.comment.id }}
+        THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
+        CMD: ${{ steps.prepare.outputs.cmd }}
+        GUARDED_PATHS: ${{ inputs.guarded_paths }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        api="https://api.github.com/repos/$REPO"
+        auth="Authorization: Bearer $GH_TOKEN"
+        reply=$(cat "$RUNNER_TEMP/reply.md")
+
+        if [ -n "$THREAD" ]; then
+          post="$api/pulls/$PR/comments/$COMMENT_ID/replies"
+        else
+          post="$api/issues/$PR/comments"
+        fi
+        answer() {
+          curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
+            "$post" -d "$(jq -n --arg b "$1" '{body: $b}')" > /dev/null
+        }
+
+        if [ "$CMD" = "review" ] || [ "$CMD" = "improve" ]; then
+          git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+          python3 "$ACTION_PATH/scripts/post_review.py"
+          exit 0
+        fi
+
+        if [ "$CMD" = "describe" ]; then
+          # Update PR body and post the walkthrough as a comment.
+          curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
+            "$api/pulls/$PR" -d "$(jq -n --arg b "$reply" '{body: $b}')" > /dev/null
+          answer "$(printf 'Updated the PR description:\n\n%s' "$reply")"
+          exit 0
+        fi
+
+        if [ "$CMD" = "ask" ]; then
+          answer "$reply"
+          exit 0
+        fi
+
+        rm -rf .git/hooks
+        git config --local --unset-all core.fsmonitor 2>/dev/null || true
+        git config --local --unset-all core.hooksPath 2>/dev/null || true
+
+        if [ "${{ steps.fix.outputs.changed }}" != "true" ]; then
+          answer "$(printf 'No change made.\n\n%s' "$reply")"
+          exit 0
+        fi
+
+        read -r branch default < <(curl -fsSL -H "$auth" "$api/pulls/$PR" \
+          | jq -r '"\(.head.ref) \(.head.repo.default_branch)"')
+        : "${branch:?could not read the PR branch}"
+        case "$branch" in
+          master|main|HEAD|refs/*|*/master|*/main) branch="" ;;
+        esac
+        if [ -z "$branch" ] || [ "$branch" = "$default" ]; then
+          answer "Refusing to push: that is the default branch. Nothing was pushed."
+          exit 1
+        fi
+
+        git add -A
+        if [ -n "$GUARDED_PATHS" ]; then
+          # shellcheck disable=SC2086
+          touched=$(git diff --cached --name-only -- $GUARDED_PATHS)
+          if [ -n "$touched" ]; then
+            # shellcheck disable=SC2086
+            git reset -q -- $GUARDED_PATHS
+            answer "That fix wanted to change guarded build, dependency or migration files, which I do not touch ($(printf '%s' "$touched" | tr '\n' ' ')). Nothing was pushed; do it by hand."
+            exit 1
+          fi
+        fi
+
+        git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+          -c user.name=Pi -c user.email=pi@noreply.github.com \
+          commit -q -m "pi: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
+        git push -q --no-verify "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
+          "HEAD:refs/heads/$branch"
+
+        answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$(git rev-parse --short HEAD)" "$branch" "$reply")"
+
+    - name: Report when @pi command fails
+      if: failure() && steps.prepare.outputs.go == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+        COMMENT_ID: ${{ github.event.comment.id }}
+        THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
+        RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        api="https://api.github.com/repos/$REPO"
+        auth="Authorization: Bearer $GH_TOKEN"
+        if [ -n "$THREAD" ]; then
+          post="$api/pulls/$PR/comments/$COMMENT_ID/replies"
+        else
+          post="$api/issues/$PR/comments"
+        fi
+        curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
+          "$post" -d "$(jq -n --arg b "Pi did not finish this one: a step failed, so nothing was pushed past the checks. The log says which: $RUN" '{body: $b}')" > /dev/null
