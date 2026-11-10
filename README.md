@@ -169,6 +169,7 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `thinking` | `high` | Thinking depth for review runs (`off`, `minimal`, `low`, `medium`, `high`). |
 | `rubric_file` | `AGENTS.md` | File read from the **base** branch as the system-prompt rubric (falls back to `CLAUDE.md` if absent). |
 | `extra_instructions` | `""` | Extra repository-specific review/fix rules appended to the prompt. |
+| `setup_cmd` | `""` | Shell command run in a secret-free step before a `@pi` / `/fix` edit (e.g. `corepack enable pnpm && pnpm install --frozen-lockfile`). |
 | `verify_cmd` | `""` | Shell command that must pass before a `@pi` / `/fix` edit is committed and pushed. |
 | `guarded_paths` | `.github .woodpecker Dockerfile ...` | Space-separated paths that `@pi` / `/fix` is forbidden from staging or pushing. |
 | `github_token` | `${{ github.token }}` | Token used to post reviews/comments and push fixes. |

@@ -26,15 +26,19 @@ inputs:
     required: false
     default: "high"
   pi_version:
-    description: "Version of @earendil-works/pi-coding-agent to install."
+    description: "Version or dist-tag of @earendil-works/pi-coding-agent to install."
     required: false
-    default: "1.5.0"
+    default: "latest"
   rubric_file:
     description: "Context file read from the base branch as the review/fix rubric (falls back to CLAUDE.md if absent)."
     required: false
     default: "AGENTS.md"
   extra_instructions:
     description: "Optional extra instructions appended to the prompt."
+    required: false
+    default: ""
+  setup_cmd:
+    description: "Shell command run in a secret-free step before a @pi fix (e.g. 'corepack enable pnpm && pnpm install --frozen-lockfile')."
     required: false
     default: ""
   verify_cmd:
@@ -260,6 +264,18 @@ runs:
 
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$ACTION_PATH/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
+
+    # Runs in its own step with neither GH_TOKEN nor PI_API_KEY in env, so
+    # dependency lifecycle scripts (`postinstall`) from the PR branch cannot read
+    # or exfiltrate any secret.
+    - name: Set up project dependencies for fix
+      if: steps.prepare.outputs.go == 'true' && steps.prepare.outputs.cmd == 'fix' && inputs.setup_cmd != ''
+      shell: bash
+      env:
+        SETUP_CMD: ${{ inputs.setup_cmd }}
+      run: |
+        set -euo pipefail
+        eval "$SETUP_CMD"
 
     - name: Run Pi (command)
       id: fix

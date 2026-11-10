@@ -9,7 +9,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run unit tests and validate action.yml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run unit tests and validate YAML + SVGs
         run: |
           python3 tests/test_post_review.py -v
           python3 -c "import yaml; yaml.safe_load(open('action.yml'))"
+      - name: Verify latest Pi CLI flags contract
+        run: |
+          npm i -g --no-fund --no-audit @earendil-works/pi-coding-agent@latest
+          help_out=$(pi --help)
+          for flag in "--print" "--model" "--thinking" "--tools" "--no-context-files" "--no-approve" "--no-session" "--append-system-prompt"; do
+            printf '%s\n' "$help_out" | grep -q -- "$flag" || { echo "Missing flag in pi@latest: $flag" >&2; exit 1; }
+          done
+          echo "Verified pi $(pi --version) CLI flags."

@@ -42,16 +42,12 @@ jobs:
       group: pi-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install dependencies (no secrets in env)
-        run: |
-          corepack enable pnpm
-          pnpm install --frozen-lockfile
       - uses: tripplen23/pi-pr-agent@v1
         with:
           mode: comment
           api_key: ${{ secrets.OPENCODE_GO_KEY }}
+          setup_cmd: "corepack enable pnpm && pnpm install --frozen-lockfile"
           verify_cmd: "pnpm typecheck && pnpm lint && pnpm test"
