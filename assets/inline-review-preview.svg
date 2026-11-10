@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" width="100%" height="100%">
+  <!-- Outer GitHub Thread Container -->
+  <rect x="4" y="4" width="972" height="552" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- File Header Bar -->
+  <rect x="4" y="4" width="972" height="42" rx="10" fill="#161b22"/>
+  <line x1="4" y1="46" x2="976" y2="46" stroke="#30363d" stroke-width="1"/>
+  <text x="24" y="30" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="600" fill="#e6edf3">app/onboarding/actions.ts</text>
+  <text x="235" y="30" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" fill="#8b949e">Lines 276 to 283</text>
+  <rect x="880" y="13" width="76" height="24" rx="12" fill="#238636" fill-opacity="0.18" stroke="#2ea043"/>
+  <text x="918" y="29" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="600" fill="#3fb950">Active</text>
+
+  <!-- Diff Hunk Preview -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">
+    <rect x="5" y="47" width="970" height="26" fill="#12261e"/>
+    <text x="24" y="64" fill="#3fb950">276   +   if (existingUser) {</text>
+    <rect x="5" y="73" width="970" height="26" fill="#12261e"/>
+    <text x="24" y="90" fill="#3fb950">277   +     targetUserId = existingUser.id;</text>
+    <rect x="5" y="99" width="970" height="26" fill="#12261e"/>
+    <text x="24" y="116" fill="#3fb950">278   +     ...(isSeedAdmin(existingUser.email) ? { role: "admin" } : {}),</text>
+  </g>
+  <line x1="4" y1="125" x2="976" y2="125" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Bot Header -->
+  <circle cx="34" cy="152" r="14" fill="#21262d" stroke="#30363d"/>
+  <text x="34" y="157" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="800" fill="#f59e0b">π</text>
+  <text x="58" y="157" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="14" font-weight="700" fill="#e6edf3">github-actions</text>
+  <rect x="166" y="142" width="34" height="20" rx="10" fill="#21262d" stroke="#30363d"/>
+  <text x="183" y="156" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" fill="#8b949e">bot</text>
+  <text x="210" y="156" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" fill="#8b949e">commented just now</text>
+
+  <!-- Severity Badge + Imperative Title -->
+  <rect x="58" y="176" width="44" height="22" rx="4" fill="#dc2626"/>
+  <text x="80" y="191" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="700" fill="#ffffff">High</text>
+  <text x="112" y="192" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#f0f6fc">Do not grant admin from an unproved email address</text>
+
+  <!-- Finding Explanation -->
+  <text x="58" y="220" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13.5" fill="#c9d1d9">
+    <tspan x="58" dy="0">The 1-click claim accepts a typed email without verifying a code and applies </tspan>
+    <tspan font-family="ui-monospace, monospace" fill="#f0f6fc">isSeedAdmin(claim.email)</tspan>
+    <tspan> directly.</tspan>
+    <tspan x="58" dy="22">Any anonymous session typing a listed domain becomes </tspan>
+    <tspan font-family="ui-monospace, monospace" fill="#f0f6fc">role = 'admin'</tspan>
+    <tspan> and bypasses </tspan>
+    <tspan font-family="ui-monospace, monospace" fill="#f0f6fc">campaignView</tspan>
+    <tspan> redaction.</tspan>
+  </text>
+
+  <!-- Suggested Change Box -->
+  <rect x="58" y="258" width="894" height="156" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+  <rect x="58" y="258" width="894" height="32" rx="8" fill="#161b22"/>
+  <line x1="58" y1="290" x2="952" y2="290" stroke="#30363d" stroke-width="1"/>
+  <text x="74" y="279" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="600" fill="#8b949e">Suggested change</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5">
+    <rect x="59" y="291" width="892" height="26" fill="#3c1618"/>
+    <text x="74" y="308" fill="#ffa198">277   -     targetUserId = existingUser.id;</text>
+    <rect x="59" y="317" width="892" height="26" fill="#3c1618"/>
+    <text x="74" y="334" fill="#ffa198">278   -     ...(isSeedAdmin(existingUser.email) ? { role: "admin" } : {}),</text>
+    <rect x="59" y="343" width="892" height="26" fill="#12261e"/>
+    <text x="74" y="360" fill="#56d364">277   +     if (existingUser.id !== session.user.id) return { error: t("signInFirst") };</text>
+  </g>
+  <line x1="58" y1="369" x2="952" y2="369" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Commit Suggestion Buttons -->
+  <rect x="650" y="378" width="142" height="28" rx="6" fill="#21262d" stroke="#30363d"/>
+  <text x="721" y="396" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="600" fill="#c9d1d9">Commit suggestion</text>
+  <rect x="800" y="378" width="140" height="28" rx="6" fill="#21262d" stroke="#30363d"/>
+  <text x="870" y="396" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="600" fill="#c9d1d9">Add to batch</text>
+
+  <!-- Divider for @pi Reply Thread -->
+  <line x1="4" y1="432" x2="976" y2="432" stroke="#21262d" stroke-width="1.5"/>
+
+  <!-- Author @pi Command + Bot Reply -->
+  <circle cx="34" cy="462" r="12" fill="#1f6feb"/>
+  <text x="34" y="466" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="700" fill="#ffffff">U</text>
+  <text x="56" y="466" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#58a6ff">@pi</text>
+  <text x="88" y="466" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" fill="#e6edf3">apply this guard and add a regression case in tests/session-campaign-owner.test.ts</text>
+  <rect x="642" y="450" width="32" height="22" rx="11" fill="#1f242d" stroke="#30363d"/>
+  <text x="658" y="465" text-anchor="middle" font-size="12">👀</text>
+
+  <circle cx="34" cy="512" r="12" fill="#21262d" stroke="#30363d"/>
+  <text x="34" y="516" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="800" fill="#f59e0b">π</text>
+  <text x="56" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" fill="#8b949e">Pushed</text>
+  <rect x="106" y="501" width="66" height="21" rx="5" fill="#161b22" stroke="#30363d"/>
+  <text x="139" y="515" text-anchor="middle" font-family="ui-monospace, monospace" font-size="12" fill="#58a6ff">d6fd9c9</text>
+  <text x="180" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" fill="#c9d1d9">after</text>
+  <text x="216" y="516" font-family="ui-monospace, monospace" font-size="12.5" fill="#3fb950">pnpm typecheck &amp;&amp; pnpm lint &amp;&amp; pnpm test</text>
+  <text x="515" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" fill="#c9d1d9">passed. Thread resolved.</text>
+</svg>

@@ -1,0 +1,26 @@
+# Security Policy
+
+## Threat Model
+
+`pi-pr-agent` runs against pull requests whose diffs and files may contain untrusted input (including prompt injection attempts planted in source files, commit messages, or PR descriptions).
+
+### Built-in Defenses
+
+1. **Fork Isolation**
+   - Recommended workflows skip review jobs on fork PRs (`github.event.pull_request.head.repo.full_name == github.repository`), and `@pi` write commands only run when `github.event.comment.author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`.
+2. **Base-Branch Rubric Isolation**
+   - `AGENTS.md`, `CLAUDE.md`, and custom prompt overrides are read from the `base` branch via `git show base:<path>`.
+   - Pi is invoked with `--no-context-files --no-approve --no-session`, preventing PR branches from overriding `AGENTS.md` or executing `.pi/` extensions.
+3. **Step-Scoped Secrets**
+   - `github_token` (`GH_TOKEN`) is only passed to the checkout/fetch and publish steps — never to the `Run Pi` or `Verify fix` steps.
+   - `api_key` is only passed to the `Run Pi` step and is literally redacted (`perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g'`) from all published comments.
+   - Use a restricted, monthly-capped model API key (e.g. an OpenCode Go key with `Models: Request` permission only).
+4. **Git Hook & Guarded Path Enforcement**
+   - Before staging/committing in the publish step, `.git/hooks`, `core.fsmonitor`, and `core.hooksPath` are removed, `git commit` runs with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`, and `git push` runs with `--no-verify`.
+   - Changes to `.github`, `.woodpecker`, `Dockerfile`, lockfiles, or migrations (`guarded_paths`) are rejected and reset before any push.
+
+## Reporting a Vulnerability
+
+If you discover a security issue (such as a credential leak path, command injection, or guard bypass), please open a private security advisory on GitHub at:
+
+https://github.com/tripplen23/pi-pr-agent/security/advisories/new

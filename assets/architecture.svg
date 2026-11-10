@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 250" width="100%" height="100%">
+  <rect x="2" y="2" width="1036" height="246" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- Step 1: Deterministic Prep -->
+  <g transform="translate(24, 28)">
+    <rect width="228" height="194" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="16" y="16" width="84" height="22" rx="11" fill="#1f6feb" fill-opacity="0.2" stroke="#1f6feb"/>
+    <text x="58" y="31" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="700" fill="#58a6ff">STEP 1 · PREP</text>
+    <text x="16" y="60" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#f0f6fc">Deterministic Context</text>
+    <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12.5" fill="#8b949e">
+      <text x="16" y="88">• Read AGENTS.md from base</text>
+      <text x="16" y="112">• Filter lockfiles &amp; build noise</text>
+      <text x="16" y="136">• Number diff lines (L123 +)</text>
+      <text x="16" y="160">• Pull commits &amp; review threads</text>
+    </g>
+  </g>
+
+  <!-- Arrow 1 -->
+  <path d="M 258 125 L 282 125" stroke="#f59e0b" stroke-width="2" fill="none"/>
+  <polygon points="282,120 292,125 282,130" fill="#f59e0b"/>
+
+  <!-- Step 2: Pi Agent -->
+  <g transform="translate(296, 28)">
+    <rect width="228" height="194" rx="10" fill="#161b22" stroke="#f59e0b" stroke-width="1.5"/>
+    <rect x="16" y="16" width="90" height="22" rx="11" fill="#f59e0b" fill-opacity="0.2" stroke="#f59e0b"/>
+    <text x="61" y="31" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="700" fill="#fbbf24">STEP 2 · AGENT</text>
+    <text x="16" y="60" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#f0f6fc">Pi Coding Agent</text>
+    <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12.5" fill="#8b949e">
+      <text x="16" y="88">• --no-context-files isolation</text>
+      <text x="16" y="112">• rg caller &amp; contract search</text>
+      <text x="16" y="136">• Check every &lt;review_files&gt;</text>
+      <text x="16" y="160">• No GH_TOKEN in environment</text>
+    </g>
+  </g>
+
+  <!-- Arrow 2 -->
+  <path d="M 530 125 L 554 125" stroke="#f59e0b" stroke-width="2" fill="none"/>
+  <polygon points="554,120 564,125 554,130" fill="#f59e0b"/>
+
+  <!-- Step 3: Verification & Guards -->
+  <g transform="translate(568, 28)">
+    <rect width="214" height="194" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="16" y="16" width="90" height="22" rx="11" fill="#238636" fill-opacity="0.2" stroke="#2ea043"/>
+    <text x="61" y="31" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="700" fill="#3fb950">STEP 3 · GUARD</text>
+    <text x="16" y="60" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#f0f6fc">Deterministic Guards</text>
+    <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12.5" fill="#8b949e">
+      <text x="16" y="88">• Snap drifted lines to hunks</text>
+      <text x="16" y="112">• Disarm cross-hunk suggestion</text>
+      <text x="16" y="136">• Run verify_cmd on @pi fixes</text>
+      <text x="16" y="160">• Block guarded_paths &amp; hooks</text>
+    </g>
+  </g>
+
+  <!-- Arrow 3 -->
+  <path d="M 788 125 L 812 125" stroke="#f59e0b" stroke-width="2" fill="none"/>
+  <polygon points="812,120 822,125 812,130" fill="#f59e0b"/>
+
+  <!-- Step 4: GitHub Publish -->
+  <g transform="translate(826, 28)">
+    <rect width="190" height="194" rx="10" fill="#161b22" stroke="#30363d"/>
+    <rect x="16" y="16" width="96" height="22" rx="11" fill="#a855f7" fill-opacity="0.2" stroke="#a855f7"/>
+    <text x="64" y="31" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" font-weight="700" fill="#c084fc">STEP 4 · PUBLISH</text>
+    <text x="16" y="60" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700" fill="#f0f6fc">GitHub Sync</text>
+    <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12.5" fill="#8b949e">
+      <text x="16" y="88">• Inline review comments</text>
+      <text x="16" y="112">• Auto-resolve fixed threads</text>
+      <text x="16" y="136">• Sync stale PR description</text>
+      <text x="16" y="160">• Push verified @pi commits</text>
+    </g>
+  </g>
+</svg>
