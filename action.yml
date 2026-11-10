@@ -237,8 +237,10 @@ runs:
 
         git init -q .
         git fetch -q --no-tags "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
-          "+refs/pull/$PR/head:refs/heads/pr-head" "+refs/heads/$base:refs/heads/base"
+          "+refs/pull/$PR/head:refs/heads/pr-head" "+refs/heads/$base:refs/heads/base-tip"
         git checkout -q pr-head
+        mb=$(git merge-base base-tip pr-head 2>/dev/null || git rev-parse base-tip)
+        git branch -f base "$mb"
 
     - name: Run Pi (command)
       id: fix
