@@ -21,6 +21,10 @@ inputs:
     description: "Pi model identifier (`provider/model`)."
     required: false
     default: "opencode-go/deepseek-v4.1-flash"
+  fallback_model:
+    description: "Fallback model identifier tried when the primary model is overloaded (429/5xx)."
+    required: false
+    default: "opencode-go/glm-5.3-flash"
   thinking:
     description: "Thinking level for review runs (`off`, `minimal`, `low`, `medium`, `high`)."
     required: false
@@ -126,6 +130,7 @@ runs:
         PI_API_KEY: ${{ inputs.api_key }}
         PI_API_KEY_ENV: ${{ inputs.api_key_env }}
         PI_MODEL: ${{ inputs.model }}
+        PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
         PI_VERSION: ${{ inputs.pi_version }}
       run: |
@@ -151,13 +156,24 @@ runs:
           sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
         fi
 
-        perl -e 'alarm shift; exec @ARGV' 1200 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
-          --model "$PI_MODEL" \
-          --thinking "$PI_THINKING" \
-          --tools read,bash \
-          --no-context-files \
-          --no-approve --no-session \
-          "${sys_args[@]}" > review-raw.md
+        run_ok=0
+        for candidate in "$PI_MODEL" "$PI_MODEL" "${PI_FALLBACK_MODEL:-}"; do
+          [ -n "$candidate" ] || continue
+          echo "Running review with model: $candidate (thinking: $PI_THINKING)"
+          if perl -e 'alarm shift; exec @ARGV' 1200 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+            --model "$candidate" \
+            --thinking "$PI_THINKING" \
+            --tools read,bash \
+            --no-context-files \
+            --no-approve --no-session \
+            "${sys_args[@]}" > review-raw.md && [ -s review-raw.md ]; then
+            run_ok=1
+            break
+          fi
+          echo "Model $candidate failed or was overloaded (429/5xx); backing off 20s before retry/fallback..." >&2
+          sleep 20
+        done
+        [ "$run_ok" -eq 1 ] || { echo "All model attempts failed" >&2; exit 1; }
 
         perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g' review-raw.md > review.md
         echo "bytes: $(wc -c < review.md)"
@@ -285,6 +301,7 @@ runs:
         PI_API_KEY: ${{ inputs.api_key }}
         PI_API_KEY_ENV: ${{ inputs.api_key_env }}
         PI_MODEL: ${{ inputs.model }}
+        PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_VERSION: ${{ inputs.pi_version }}
         RUBRIC_FILE: ${{ inputs.rubric_file }}
         EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
@@ -350,12 +367,23 @@ runs:
           tools="read,bash,edit,write"
         fi
 
-        perl -e 'alarm shift; exec @ARGV' 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
-          --model "$PI_MODEL" \
-          --tools "$tools" \
-          --no-context-files \
-          --no-approve --no-session \
-          "${sys_args[@]}" | tee .pi-fix-reply.md
+        run_ok=0
+        for candidate in "$PI_MODEL" "$PI_MODEL" "${PI_FALLBACK_MODEL:-}"; do
+          [ -n "$candidate" ] || continue
+          echo "Running $CMD with model: $candidate"
+          if perl -e 'alarm shift; exec @ARGV' 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+            --model "$candidate" \
+            --tools "$tools" \
+            --no-context-files \
+            --no-approve --no-session \
+            "${sys_args[@]}" | tee .pi-fix-reply.md && [ -s .pi-fix-reply.md ]; then
+            run_ok=1
+            break
+          fi
+          echo "Model $candidate failed or was overloaded (429/5xx); backing off 20s before retry/fallback..." >&2
+          sleep 20
+        done
+        [ "$run_ok" -eq 1 ] || { echo "All model attempts failed" >&2; exit 1; }
 
         perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g' .pi-fix-reply.md > "$RUNNER_TEMP/reply.md"
         cp "$RUNNER_TEMP/reply.md" review.md
