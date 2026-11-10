@@ -54,7 +54,7 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
    - Reads `AGENTS.md` (or `CLAUDE.md`) from the **base** branch (`git show base:AGENTS.md`) so an untrusted PR cannot rewrite its own review checklist.
    - Filters out lockfiles and generated noise (`pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `*.min.js`, `*.snap`), builds an explicit `<review_files>` checklist, and prefixes every new-side diff line with its exact line number (`L264 + if (existingUser) {`) so the model never miscounts lines from `@@` headers.
    - Fetches PR title, description, full commit messages (`messageHeadline` + `messageBody`), and open/resolved review threads with author replies into `<pr_context>`.
-2. **Repository-Aware Agent Pass (`pi -p --thinking low`)**
+2. **Repository-Aware Agent Pass (`pi -p --thinking high`)**
    - Inspects `<review_files>` and uses `rg` + `read` to verify callers, schemas, contracts, and tests across the repository without running slow builds inside the review container.
 3. **Deterministic Guards & GitHub Sync (`scripts/post_review.py`)**
    - Validates `start_line..line` against actual diff hunks, snaps minor 1–5 line drift to the nearest hunk, and automatically disarms ` ```suggestion ` fences when a range crosses hunk boundaries so clicking **Commit suggestion** can never corrupt surrounding code.
@@ -166,8 +166,7 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `api_key` | *(required)* | API key for the model provider. |
 | `api_key_env` | `OPENCODE_API_KEY` | Environment variable Pi reads for the provider key (`OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). |
 | `model` | `opencode-go/deepseek-v4.1-flash` | Model ID passed to `pi --model`. |
-| `thinking` | `low` | Thinking depth for review runs (`off`, `minimal`, `low`, `medium`, `high`). |
-| `pi_version` | `1.5.0` | Version of `@earendil-works/pi-coding-agent` to install. |
+| `thinking` | `high` | Thinking depth for review runs (`off`, `minimal`, `low`, `medium`, `high`). |
 | `rubric_file` | `AGENTS.md` | File read from the **base** branch as the system-prompt rubric (falls back to `CLAUDE.md` if absent). |
 | `extra_instructions` | `""` | Extra repository-specific review/fix rules appended to the prompt. |
 | `verify_cmd` | `""` | Shell command that must pass before a `@pi` / `/fix` edit is committed and pushed. |

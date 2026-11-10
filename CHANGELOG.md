@@ -8,7 +8,7 @@ All notable changes to `pi-pr-agent` are documented in this file.
 - **Pre-numbered `L<num>` diffs & lockfile filtering (`scripts/fetch_pr_context.py`)**: filters out lockfiles/generated files (`pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `*.min.js`, `*.snap`, `*.tsbuildinfo`), generates an explicit `<review_files>` checklist, and prefixes every new-side hunk line with `L<num>` to eliminate line-number drift.
 - **Full commit message bodies (`messageBody`)** in `<pr_context>` so design rationale recorded in commits is visible during review and PR description sync.
 - **Nearest-hunk line relocation (`scripts/post_review.py`)**: snaps findings that drift 1–5 lines outside a hunk boundary back to the nearest valid hunk line while disarming `suggestion` fences.
-- **`thinking` input (default `low`)**: bounds per-turn reasoning latency on review runs for 2–3× faster completion on large PRs.
+- **`thinking` input (default `high`)**: configurable reasoning depth for review runs while pre-numbered diffs eliminate wasted tool turns.
 
 ## [v1.1.0] - 2026-11-10
 

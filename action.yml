@@ -24,7 +24,7 @@ inputs:
   thinking:
     description: "Thinking level for review runs (`off`, `minimal`, `low`, `medium`, `high`)."
     required: false
-    default: "low"
+    default: "high"
   pi_version:
     description: "Version of @earendil-works/pi-coding-agent to install."
     required: false
