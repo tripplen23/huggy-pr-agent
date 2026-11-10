@@ -14,7 +14,7 @@ import urllib.request
 MARKER = "<!-- pi-review -->"
 BADGES = {
     "High": "![High](https://img.shields.io/badge/High-dc2626)",
-    "Medium": "![Medium](https://img.shields.io/badge/Medium-d97706)",
+    "Medium": "![Medium](https://img.shields.io/badge/Medium-facc15)",
     "Low": "![Low](https://img.shields.io/badge/Low-2563eb)",
 }
 HEADER_RE = re.compile(
