@@ -68,6 +68,29 @@ def disarm_suggestion(markdown: str) -> str:
     return re.sub(r"^(\s*```)suggestion\b", r"\1", markdown, flags=re.M)
 
 
+def nearest_hunk_line(
+    path: str,
+    target_line: int,
+    hunk_of: dict[tuple[str, int], int],
+    max_distance: int = 5,
+) -> tuple[int | None, int | None]:
+    """If (path, target_line) is within max_distance of a hunk line in path, return (line, hunk_id)."""
+    if (path, target_line) in hunk_of:
+        return target_line, hunk_of[(path, target_line)]
+    best_line = None
+    best_dist = max_distance + 1
+    for (p, ln), hid in hunk_of.items():
+        if p != path:
+            continue
+        dist = abs(ln - target_line)
+        if dist < best_dist:
+            best_dist = dist
+            best_line = ln
+    if best_line is not None:
+        return best_line, hunk_of[(path, best_line)]
+    return None, None
+
+
 def parse_review_markdown(
     text: str,
     hunk_of: dict[tuple[str, int], int],
@@ -130,10 +153,19 @@ def parse_review_markdown(
 
         summary_body = disarm_suggestion(body_text)
         end_hunk = hunk_of.get((f["path"], f["end"]))
-        same_hunk = f["start"] < f["end"] and hunk_of.get((f["path"], f["start"])) == end_hunk
+        relocated = False
+        if end_hunk is None:
+            snapped_line, snapped_hunk = nearest_hunk_line(f["path"], f["end"], hunk_of)
+            if snapped_line is not None:
+                f["end"] = snapped_line
+                f["start"] = snapped_line
+                end_hunk = snapped_hunk
+                relocated = True
+        same_hunk = (not relocated) and f["start"] < f["end"] and hunk_of.get((f["path"], f["start"])) == end_hunk
         f["end_hunk"] = end_hunk
         f["same_hunk"] = same_hunk
-        f["eff_start"] = f["start"] if (f["start"] == f["end"] or same_hunk) else f["end"]
+        f["relocated"] = relocated
+        f["eff_start"] = f["start"] if (not relocated and (f["start"] == f["end"] or same_hunk)) else f["end"]
 
         if body_text and rest:
             parts = [p.strip() for p in re.split(r"\s*·\s*", rest, maxsplit=1) if p.strip()]
@@ -274,7 +306,11 @@ def main() -> int:
         end_hunk = f["end_hunk"]
         same_hunk = f["same_hunk"]
         eff_start = f["eff_start"]
-        comment_body = f["comment"] if eff_start == s_l else disarm_suggestion(f["comment"])
+        comment_body = (
+            f["comment"]
+            if (eff_start == s_l and not f.get("relocated"))
+            else disarm_suggestion(f["comment"])
+        )
         bucket = open_threads.get((p, eff_start, e_l))
         if bucket:
             cid, old_body = bucket.pop(0)

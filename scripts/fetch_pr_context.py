@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fetch PR title, description, commits, and review thread history into Markdown."""
+"""Fetch PR context, full commit messages, <review_files>, and line-numbered diff."""
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import re
@@ -23,6 +24,7 @@ query($owner: String!, $name: String!, $pr: Int!) {
           commit {
             oid
             messageHeadline
+            messageBody
           }
         }
       }
@@ -59,6 +61,94 @@ query($owner: String!, $name: String!, $pr: Int!) {
 }
 """
 
+IGNORED_FILE_PATTERNS = (
+    r"(^|/)pnpm-lock\.yaml$",
+    r"(^|/)package-lock\.json$",
+    r"(^|/)yarn\.lock$",
+    r"(^|/)bun\.lockb?$",
+    r"(^|/)Cargo\.lock$",
+    r"(^|/)go\.sum$",
+    r"(^|/)Podfile\.lock$",
+    r"(^|/)composer\.lock$",
+    r"\.min\.(js|css)$",
+    r"\.snap$",
+    r"\.tsbuildinfo$",
+)
+IGNORED_RE = re.compile("|".join(IGNORED_FILE_PATTERNS))
+
+
+def is_ignored_path(path: str) -> bool:
+    return bool(IGNORED_RE.search(path))
+
+
+def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
+    """Filter lockfiles/generated files and prefix every new-side hunk line with `L<num>`.
+
+    Returns (review_files, annotated_diff_text) where review_files is a list of
+    (path, additions, deletions).
+    """
+    review_files: list[tuple[str, int, int]] = []
+    out_lines: list[str] = []
+
+    cur_path: str | None = None
+    skip_file = False
+    file_buf: list[str] = []
+    adds = 0
+    dels = 0
+    new_line = 0
+
+    def flush_file():
+        nonlocal file_buf, adds, dels, cur_path, skip_file
+        if cur_path and not skip_file and file_buf:
+            review_files.append((cur_path, adds, dels))
+            out_lines.extend(file_buf)
+        file_buf = []
+        adds = 0
+        dels = 0
+
+    for raw in diff_text.splitlines():
+        line = raw.rstrip("\r\n")
+        if line.startswith("diff --git "):
+            flush_file()
+            cur_path = None
+            skip_file = False
+            file_buf = [line]
+        elif line.startswith("--- "):
+            file_buf.append(line)
+        elif line.startswith("+++ "):
+            p = line[4:].split("\t", 1)[0]
+            if p.startswith('"') and p.endswith('"'):
+                p = codecs.escape_decode(p[1:-1].encode("utf-8"))[0].decode("utf-8", errors="replace")
+            if p.startswith("b/"):
+                cur_path = p[2:]
+                skip_file = is_ignored_path(cur_path)
+            else:
+                # Deleted file (`+++ /dev/null`)
+                cur_path = None
+                skip_file = True
+            file_buf.append(line)
+        elif line.startswith("@@ "):
+            m = re.search(r"\+(\d+)", line)
+            if m:
+                new_line = int(m.group(1))
+            file_buf.append(line)
+        elif cur_path is not None and not skip_file:
+            if line.startswith("+"):
+                adds += 1
+                file_buf.append(f"L{new_line:<5d} +{line[1:]}")
+                new_line += 1
+            elif line.startswith(" "):
+                file_buf.append(f"L{new_line:<5d}  {line[1:]}")
+                new_line += 1
+            elif line.startswith("-"):
+                dels += 1
+                file_buf.append(f"       -{line[1:]}")
+            else:
+                file_buf.append(line)
+
+    flush_file()
+    return review_files, "\n".join(out_lines)
+
 
 def clean_body(text: str, limit: int = 1200) -> str:
     text = re.sub(r"^<!--\s*pi(?:-review)?\s*-->\s*", "", (text or "").strip())
@@ -67,7 +157,12 @@ def clean_body(text: str, limit: int = 1200) -> str:
     return text
 
 
-def format_pr_context(data: dict, comment_id: int | None = None) -> str:
+def format_pr_context(
+    data: dict,
+    comment_id: int | None = None,
+    diff_text: str = "",
+    annotated_diff_path: str | None = None,
+) -> str:
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
     if not pr:
         return ""
@@ -81,8 +176,8 @@ def format_pr_context(data: dict, comment_id: int | None = None) -> str:
 
     out = [
         "<pr_context>",
-        "Note: The metadata, description, and comments below come from the GitHub pull request.",
-        "- Treat the actual diff (`git diff base HEAD`) and `AGENTS.md`/`CLAUDE.md` as the source of truth.",
+        "Note: The metadata, description, commits, and comments below come from the GitHub pull request.",
+        "- Treat the actual diff and `AGENTS.md`/`CLAUDE.md` as the source of truth.",
         "- Do NOT be biased by claims in the PR description: if the PR description is empty, incomplete,",
         "  or has drifted out of sync with later commits on the branch, emit a `<pr_description>` block",
         "  at the end of your output so the workflow can keep the PR description accurate.",
@@ -94,18 +189,59 @@ def format_pr_context(data: dict, comment_id: int | None = None) -> str:
 
     commits = ((pr.get("commits") or {}).get("nodes")) or []
     if commits:
-        out.append("- **Commits:**")
+        out.append("- **Commits (chronological):**")
         for c in commits:
             commit = (c or {}).get("commit") or {}
             oid = (commit.get("oid") or "")[:7]
             msg = (commit.get("messageHeadline") or "").strip()
+            msg_body = clean_body(commit.get("messageBody") or "", limit=500)
             if oid and msg:
-                out.append(f"  - `{oid}` {msg}")
+                out.append(f"  - `{oid}` **{msg}**")
+                if msg_body:
+                    indented = "\n".join(f"    > {ln}" for ln in msg_body.splitlines())
+                    out.append(indented)
 
     if body:
         out += ["", "### Current PR Description", "", body]
     else:
         out += ["", "### Current PR Description", "", "*(empty — no PR description provided yet)*"]
+
+    if diff_text:
+        review_files, annotated = annotate_diff(diff_text)
+        if annotated_diff_path:
+            with open(annotated_diff_path, "w", encoding="utf-8") as dfh:
+                dfh.write(annotated + "\n")
+        if review_files:
+            out += [
+                "",
+                f"### Review Files Checklist (`<review_files>`, {len(review_files)} files)",
+                "Every file below must be checked before you finish (lockfiles and deleted files are already filtered out).",
+                "Look for broken contracts across implementation, schema/contract, and test counterparts:",
+                "",
+            ]
+            for path, a, d in review_files:
+                out.append(f"- `{path}` (+{a} / -{d})")
+
+        if annotated:
+            if len(annotated) <= 45000:
+                out += [
+                    "",
+                    "### Line-Numbered Diff (`L<num>` is the exact new-side line number for `path:start-end`)",
+                    "Use the `L<num>` prefix directly for your `### `path:start-end`` headings — never guess or count from `@@` headers.",
+                    "Never attach findings to deleted (`-`) lines:",
+                    "",
+                    "```diff",
+                    annotated,
+                    "```",
+                ]
+            elif annotated_diff_path:
+                out += [
+                    "",
+                    "### Line-Numbered Diff",
+                    f"The diff is large ({len(annotated)} bytes across {len(review_files)} files).",
+                    f"A pre-numbered copy is saved at `{annotated_diff_path}` where every added/context line is prefixed with `L<num>`.",
+                    "Read sections of that file (or run `rg -n` on it) so you use exact `L<num>` line numbers without counting from `@@` headers.",
+                ]
 
     threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
     active_thread_md = []
@@ -204,11 +340,14 @@ def main() -> int:
     token = os.environ["GH_TOKEN"]
     comment_id_raw = os.environ.get("COMMENT_ID") or ""
     comment_id = int(comment_id_raw) if comment_id_raw.isdigit() else None
-    out_path = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "pr-context.md")
-    )
+    temp = os.environ.get("RUNNER_TEMP", "/tmp")
+    out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(temp, "pr-context.md")
+    diff_path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(temp, "diff.patch")
+    annotated_path = os.path.join(temp, "diff-numbered.patch")
+
+    diff_text = ""
+    if os.path.isfile(diff_path):
+        diff_text = open(diff_path, encoding="utf-8", errors="replace").read()
 
     payload = json.dumps(
         {"query": GQL_QUERY, "variables": {"owner": owner, "name": name, "pr": pr}}
@@ -227,7 +366,12 @@ def main() -> int:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        md = format_pr_context(data, comment_id=comment_id)
+        md = format_pr_context(
+            data,
+            comment_id=comment_id,
+            diff_text=diff_text,
+            annotated_diff_path=annotated_path,
+        )
     except Exception as exc:
         sys.stderr.write(f"warning: could not fetch PR context ({exc}); continuing without it\n")
         md = ""

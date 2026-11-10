@@ -133,7 +133,17 @@ All good.
                         "baseRefName": "master",
                         "headRefName": "feat-socket",
                         "author": {"login": "alice"},
-                        "commits": {"nodes": [{"commit": {"oid": "1234567890", "messageHeadline": "feat: init"}}]},
+                        "commits": {
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "oid": "1234567890",
+                                        "messageHeadline": "feat: init",
+                                        "messageBody": "Detailed why in commit body.",
+                                    }
+                                }
+                            ]
+                        },
                         "comments": {"nodes": []},
                         "reviewThreads": {
                             "nodes": [
@@ -157,11 +167,58 @@ All good.
                 }
             }
         }
-        ctx = fetch_pr_context.format_pr_context(sample, comment_id=102)
-        self.assertIn("Do NOT be biased by claims in the PR description", ctx)
+        diff = (
+            "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\n"
+            "--- a/pnpm-lock.yaml\n"
+            "+++ b/pnpm-lock.yaml\n"
+            "@@ -1,1 +1,2 @@\n"
+            " lock\n"
+            "+more\n"
+            "diff --git a/src/a.ts b/src/a.ts\n"
+            "--- a/src/a.ts\n"
+            "+++ b/src/a.ts\n"
+            "@@ -10,2 +10,3 @@\n"
+            " const x = 1;\n"
+            "+const y = 2;\n"
+            " const z = 3;\n"
+        )
+        ctx = fetch_pr_context.format_pr_context(sample, comment_id=102, diff_text=diff)
+        self.assertIn("Detailed why in commit body.", ctx)
+        self.assertIn("Review Files Checklist (`<review_files>`, 1 files)", ctx)
+        self.assertNotIn("pnpm-lock.yaml", ctx)
+        self.assertIn("L11    +const y = 2;", ctx)
         self.assertIn("Target Review Thread for This Command", ctx)
         self.assertIn("Previously Resolved Review Threads", ctx)
         self.assertIn("Intentional per spec", ctx)
+
+    def test_nearest_hunk_relocation_snaps_and_disarms_suggestion(self):
+        diff = (
+            "diff --git a/src/app.ts b/src/app.ts\n"
+            "--- a/src/app.ts\n"
+            "+++ b/src/app.ts\n"
+            "@@ -20,2 +20,3 @@\n"
+            " const a = 1;\n"
+            "+const b = 2;\n"
+            " const c = 3;\n"
+        )
+        hunks = post_review.parse_diff_hunks(diff)
+        md = """## Review by Pi
+
+**Verdict:** nits
+
+### `src/app.ts:25` · Low · Slightly drifted line
+
+Body text.
+
+```suggestion
+const c = 4;
+```
+"""
+        _, _, findings = post_review.parse_review_markdown(md, hunks)
+        f = findings[0]
+        self.assertTrue(f["relocated"])
+        self.assertEqual(f["end"], 22)
+        self.assertEqual(f["eff_start"], 22)
 
     def test_missing_verdict_raises(self):
         with self.assertRaises(ValueError):

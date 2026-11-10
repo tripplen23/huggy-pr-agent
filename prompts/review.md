@@ -5,17 +5,21 @@ there is a finding, and the files it names are where to look. You may not change
 How to look (`base` is a local ref to the commit this PR was based on; `HEAD` is the PR):
 
 - Read the `<pr_context>` block at the end of this prompt first (PR title, current PR
-  description, commit history, open/resolved review threads, and comments).
-- **Never be biased by claims in the PR description:** the actual code (`git diff base HEAD`)
-  and `AGENTS.md` / `CLAUDE.md` are the source of truth. If the PR description claims X
-  while the code does Y, judge the code and flag the discrepancy.
+  description, full commit messages, `<review_files>` checklist, `L<num>` line-numbered
+  diff, open/resolved review threads, and comments).
+- **Never be biased by claims in the PR description:** the actual code and `AGENTS.md` /
+  `CLAUDE.md` are the source of truth. If the PR description claims X while the code does Y,
+  judge the code and flag the discrepancy.
 - **Respect review history:** do not re-report a `RESOLVED` review thread unless later
   commits reintroduced the bug or the author's explanation violates a hard rule in
   `AGENTS.md` / `CLAUDE.md`.
-- Run `git diff --stat base HEAD` first, then read `git diff base HEAD` (or batch several
-  files in one `git diff base HEAD -- file1 file2` command). Read surrounding files when
-  the diff alone is ambiguous, and use `rg` over the working tree to find every caller of a
-  function, type, or route whose signature or behaviour changed.
+- **Cover every file in `<review_files>`:** reviewing an implementation file does not cover
+  its schema, contract, route, or test counterpart. Never attach findings to deleted (`-`)
+  lines, and use the `L<num>` prefix from the line-numbered diff directly for your
+  `path:start-end` headings so line numbers never drift.
+- Read surrounding files in the working tree when the diff alone is ambiguous, and use `rg`
+  over the working tree to find every caller of a function, type, or route whose signature
+  or behaviour changed.
 - **Keep tool turns fast and bounded (at most 6–8 tool turns total):** do NOT run builds,
   test suites, typecheckers, linters, or package managers (`pnpm`, `npm`, `npx`, `tsc`,
   `vitest`, `go test`, `cargo`, `swift test`) — CI already runs them in parallel. Use
