@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Parse Pi's markdown review and publish inline diff comments + sticky summary."""
+"""Parse Pi's markdown review, sync stale PR descriptions, and publish inline diff comments."""
+
+from __future__ import annotations
 
 import codecs
 import json
@@ -20,6 +22,17 @@ HEADER_RE = re.compile(
     r"\*{0,2}`([^`:\n]+):(\d+)(?:-(\d+))?`\*{0,2}"
     r"(?:\s*(?:[·—–-]|\s)\s*(.*))?$"
 )
+PR_DESC_RE = re.compile(r"<pr_description>\s*(.*?)\s*</pr_description>", re.S)
+
+
+def extract_pr_description(text: str) -> tuple[str, str | None]:
+    """Strip `<pr_description>...</pr_description>` from text and return (cleaned_text, new_desc)."""
+    m = PR_DESC_RE.search(text)
+    if not m:
+        return text, None
+    new_desc = m.group(1).strip()
+    cleaned = (text[: m.start()] + text[m.end() :]).strip()
+    return cleaned, (new_desc or None)
 
 
 def parse_diff_hunks(diff_text: str) -> dict[tuple[str, int], int]:
@@ -164,13 +177,22 @@ def main() -> int:
             return json.loads(body) if body else None
 
     raw_text = open("review.md", encoding="utf-8").read()
+    cleaned_text, new_pr_desc = extract_pr_description(raw_text)
     diff_text = open(f"{temp}/diff.patch", encoding="utf-8", errors="replace").read()
     hunk_of = parse_diff_hunks(diff_text)
     try:
-        verdict_line, intro_lines, findings = parse_review_markdown(raw_text, hunk_of)
+        verdict_line, intro_lines, findings = parse_review_markdown(cleaned_text, hunk_of)
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
+
+    updated_desc = False
+    if new_pr_desc:
+        try:
+            api("PATCH", f"https://api.github.com/repos/{repo}/pulls/{pr}", {"body": new_pr_desc})
+            updated_desc = True
+        except Exception as exc:
+            sys.stderr.write(f"warning: could not update PR description ({exc})\n")
 
     gql_query = """
     query($owner: String!, $name: String!, $pr: Int!) {
@@ -300,7 +322,7 @@ def main() -> int:
     if intro_lines:
         body_parts += ["", "\n".join(intro_lines)]
     if not findings and not intro_lines and "looks good" not in verdict_line.lower():
-        body_parts += ["", raw_text.strip()]
+        body_parts += ["", cleaned_text.strip()]
     else:
         notes = []
         if posted_inline:
@@ -309,6 +331,8 @@ def main() -> int:
             notes.append(f"{skipped_existing} open finding(s) on the diff from an earlier push.")
         if resolved_count:
             notes.append(f"{resolved_count} addressed thread(s) resolved.")
+        if updated_desc:
+            notes.append("Updated the PR description to match the current diff.")
         if notes:
             body_parts += ["", " ".join(notes)]
     if fallback:
@@ -324,7 +348,7 @@ def main() -> int:
         api("POST", f"{issues_url}/{pr}/comments", {"body": sticky_body})
 
     print(
-        f"Review published on {repo}#{pr} ({posted_inline} inline, {len(fallback)} fallback, {resolved_count} resolved)."
+        f"Review published on {repo}#{pr} ({posted_inline} inline, {len(fallback)} fallback, {resolved_count} resolved, desc_updated={updated_desc})."
     )
     return 0
 

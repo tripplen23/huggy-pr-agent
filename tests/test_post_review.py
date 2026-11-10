@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/post_review.py."""
+"""Unit tests for scripts/post_review.py and scripts/fetch_pr_context.py."""
 
 import os
 import sys
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+import fetch_pr_context  # noqa: E402
 import post_review  # noqa: E402
 
 
@@ -103,6 +103,65 @@ replacement
         self.assertEqual(f["eff_start"], 30)
         disarmed = post_review.disarm_suggestion(f["comment"])
         self.assertNotIn("```suggestion", disarmed)
+
+    def test_extract_pr_description(self):
+        raw = """## Review by Pi
+
+**Verdict:** looks good
+
+All good.
+
+<pr_description>
+## Summary
+- Updated description matching the final commits.
+</pr_description>
+"""
+        cleaned, desc = post_review.extract_pr_description(raw)
+        self.assertEqual(desc, "## Summary\n- Updated description matching the final commits.")
+        self.assertNotIn("<pr_description>", cleaned)
+        verdict, intro, findings = post_review.parse_review_markdown(cleaned, {})
+        self.assertEqual(verdict, "**Verdict:** looks good")
+        self.assertEqual(findings, [])
+
+    def test_format_pr_context_includes_description_and_threads(self):
+        sample = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "feat: add socket server",
+                        "body": "Initial description",
+                        "baseRefName": "master",
+                        "headRefName": "feat-socket",
+                        "author": {"login": "alice"},
+                        "commits": {"nodes": [{"commit": {"oid": "1234567890", "messageHeadline": "feat: init"}}]},
+                        "comments": {"nodes": []},
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T1",
+                                    "isResolved": True,
+                                    "isOutdated": False,
+                                    "path": "src/a.ts",
+                                    "startLine": 10,
+                                    "line": 12,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 101, "author": {"login": "github-actions"}, "body": "<!-- pi --> High issue"},
+                                            {"databaseId": 102, "author": {"login": "alice"}, "body": "Intentional per spec"},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        ctx = fetch_pr_context.format_pr_context(sample, comment_id=102)
+        self.assertIn("Do NOT be biased by claims in the PR description", ctx)
+        self.assertIn("Target Review Thread for This Command", ctx)
+        self.assertIn("Previously Resolved Review Threads", ctx)
+        self.assertIn("Intentional per spec", ctx)
 
     def test_missing_verdict_raises(self):
         with self.assertRaises(ValueError):

@@ -63,6 +63,8 @@ runs:
       if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
         TARGET: ${{ github.event.pull_request.base.ref }}
         PR: ${{ github.event.pull_request.number }}
         RUBRIC_FILE: ${{ inputs.rubric_file }}
@@ -102,6 +104,12 @@ runs:
           printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief.md"
         fi
 
+        python3 "$ACTION_PATH/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md"
+        if [ -s "$RUNNER_TEMP/pr-context.md" ]; then
+          printf '\n\n' >> "$RUNNER_TEMP/brief.md"
+          cat "$RUNNER_TEMP/pr-context.md" >> "$RUNNER_TEMP/brief.md"
+        fi
+
     - name: Run Pi (review)
       if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
       shell: bash
@@ -133,7 +141,7 @@ runs:
           sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
         fi
 
-        perl -e 'alarm shift; exec @ARGV' 900 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+        perl -e 'alarm shift; exec @ARGV' 1200 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
           --model "$PI_MODEL" \
           --tools read,bash \
           --no-context-files \
@@ -192,6 +200,7 @@ runs:
         COMMENT_BODY: ${{ github.event.comment.body }}
         COMMENT_ID: ${{ github.event.comment.id }}
         THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         api="https://api.github.com/repos/$REPO"
@@ -242,6 +251,8 @@ runs:
         mb=$(git merge-base base-tip pr-head 2>/dev/null || git rev-parse base-tip)
         git branch -f base "$mb"
 
+        python3 "$ACTION_PATH/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md"
+
     - name: Run Pi (command)
       id: fix
       if: steps.prepare.outputs.go == 'true'
@@ -286,6 +297,10 @@ runs:
         esac
         if [ -n "$EXTRA_INSTRUCTIONS" ]; then
           printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief.md"
+        fi
+        if [ -s "$RUNNER_TEMP/pr-context.md" ]; then
+          printf '\n\n' >> "$RUNNER_TEMP/brief.md"
+          cat "$RUNNER_TEMP/pr-context.md" >> "$RUNNER_TEMP/brief.md"
         fi
 
         for attempt in 1 2 3; do
