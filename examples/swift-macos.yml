@@ -1,0 +1,55 @@
+name: Pi
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  # Runs on ubuntu-latest (fast & cheap: only needs git + ripgrep to read the repo).
+  review:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: pi-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: tripplen23/pi-pr-agent@v1
+        with:
+          mode: review
+          api_key: ${{ secrets.OPENCODE_GO_KEY }}
+
+  # Runs on macos-15 when @pi is asked to edit code so `swift test` & e2e suites
+  # gate the commit before pushing.
+  command:
+    if: >-
+      (github.event_name == 'pull_request_review_comment' ||
+       (github.event_name == 'issue_comment' && github.event.issue.pull_request)) &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      github.event.comment.user.type != 'Bot'
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    concurrency:
+      group: pi-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+      - uses: tripplen23/pi-pr-agent@v1
+        with:
+          mode: comment
+          api_key: ${{ secrets.OPENCODE_GO_KEY }}
+          verify_cmd: "(cd GrannyAgent && swift test) && scripts/proto.sh self-test && bash tests/e2e.sh"
+          guarded_paths: ".github packaging"

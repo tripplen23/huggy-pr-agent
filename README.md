@@ -6,22 +6,25 @@ Unlike single-call prompt wrappers that only see a diff snippet, `pi-pr-agent` r
 
 ---
 
-## Commands & Capabilities
+## 3-Step Setup Guide (Any Repository in 2 Minutes)
 
-| Trigger / Command | Mode | What it does |
-| --- | --- | --- |
-| **Automatic on PR open / sync** *(or comment `/review`)* | Read-only | Reviews `base...HEAD` against `AGENTS.md` / `CLAUDE.md`, posts inline diff comments (`start_line..line`) with colored `High` / `Medium` / `Low` badges, 1-click `suggestion` blocks, auto-resolves addressed threads, and updates one sticky `<!-- pi-review -->` summary. |
-| **`/describe`** *(or `@pi /describe`)* | Read-only | Generates a structured PR summary (`Type`, overview, and file-by-file walkthrough table) and updates the PR description. |
-| **`/improve`** *(or `@pi /improve`)* | Read-only | Scans the PR diff for self-contained code improvements and posts inline committable ` ```suggestion ` blocks. |
-| **`/ask <question>`** *(or `@pi /ask ...`)* | Read-only | Answers questions about the PR or surrounding codebase directly in the conversation or diff review thread, citing exact `path:line` references. |
-| **`@pi <instruction>`** *(or `/fix ...`, `/pi ...`)* | Write + Verify | Edits the PR branch to address the request (works in PR conversation, inline diff threads, and **Quote replies**), runs your `verify_cmd` test gate, blocks changes to `guarded_paths`, and commits + pushes to the PR branch. |
+### Step 1 — Set the API Key Secret
 
----
+Using the GitHub CLI (`gh`), set your [OpenCode Go](https://opencode.ai/console/go) key (or OpenRouter/Anthropic key) on the target repository:
 
-## Quick Start (1 workflow file + 1 secret)
+```bash
+# If you already connected opencode-go in Pi locally:
+pi auth print-api-key --provider opencode-go | gh secret set OPENCODE_GO_KEY --repo OWNER/REPO
 
-1. Add your model API key (e.g. an [OpenCode Go](https://opencode.ai/console/go) key with **Models: Request** permission) to your repository under **Settings → Secrets and variables → Actions** as **`OPENCODE_GO_KEY`**.
-2. Create **`.github/workflows/pi.yml`**:
+# Or paste a restricted key interactively:
+gh secret set OPENCODE_GO_KEY --repo OWNER/REPO
+```
+
+*(Or in the GitHub UI: **Settings → Secrets and variables → Actions → New repository secret** → Name: `OPENCODE_GO_KEY`.)*
+
+### Step 2 — Add `.github/workflows/pi.yml`
+
+Create `.github/workflows/pi.yml` in your repository and adjust `verify_cmd` to your project's test command:
 
 ```yaml
 name: Pi
@@ -72,8 +75,28 @@ jobs:
         with:
           mode: comment
           api_key: ${{ secrets.OPENCODE_GO_KEY }}
+          # Replace with your repo's test command (e.g. "cargo test", "go test ./...", "pytest"):
           verify_cmd: "pnpm typecheck && pnpm lint && pnpm test"
 ```
+
+> **macOS / Swift projects** (e.g. [`HappyVoxel/granny`](https://github.com/HappyVoxel/granny)): keep `review` on `ubuntu-latest` (fast & free) and set `runs-on: macos-15` on `command` so `swift test` can gate `@pi` commits — see [`examples/swift-macos.yml`](examples/swift-macos.yml).
+
+### Step 3 — Merge to Default Branch (`main` / `master`)
+
+- **Auto-review (`pull_request`)** works immediately — even on the PR that adds `.github/workflows/pi.yml`.
+- **Slash & `@pi` comment commands (`issue_comment`, `pull_request_review_comment`)** become active as soon as `.github/workflows/pi.yml` is merged to your default branch (`main` / `master`), because GitHub reads comment-triggered workflows from the default branch.
+
+---
+
+## Commands & Capabilities
+
+| Trigger / Command | Mode | What it does |
+| --- | --- | --- |
+| **Automatic on PR open / sync** *(or comment `/review`)* | Read-only | Reviews `base...HEAD` against `AGENTS.md` / `CLAUDE.md`, posts inline diff comments (`start_line..line`) with colored `High` / `Medium` / `Low` badges, 1-click `suggestion` blocks, auto-resolves addressed threads, and updates one sticky `<!-- pi-review -->` summary. |
+| **`/describe`** *(or `@pi /describe`)* | Read-only | Generates a structured PR summary (`Type`, overview, and file-by-file walkthrough table) and updates the PR description. |
+| **`/improve`** *(or `@pi /improve`)* | Read-only | Scans the PR diff for self-contained code improvements and posts inline committable ` ```suggestion ` blocks. |
+| **`/ask <question>`** *(or `@pi /ask ...`)* | Read-only | Answers questions about the PR or surrounding codebase directly in the conversation or diff review thread, citing exact `path:line` references. |
+| **`@pi <instruction>`** *(or `/fix ...`, `/pi ...`)* | Write + Verify | Edits the PR branch to address the request (works in PR conversation, inline diff threads, and **Quote replies**), runs your `verify_cmd` test gate, blocks changes to `guarded_paths`, and commits + pushes to the PR branch. |
 
 ---
 
@@ -91,6 +114,14 @@ jobs:
 | `verify_cmd` | `""` | Shell command that must pass before a `@pi` / `/fix` edit is committed and pushed. |
 | `guarded_paths` | `.github .woodpecker Dockerfile ...` | Space-separated paths that `@pi` / `/fix` is forbidden from staging or pushing. |
 | `github_token` | `${{ github.token }}` | Token used to post reviews/comments and push fixes. |
+
+---
+
+## Customizing the Rubric per Repo
+
+1. **Zero-config (`AGENTS.md` / `CLAUDE.md`)** — `pi-pr-agent` automatically loads `AGENTS.md` (or `CLAUDE.md`) from the base branch into Pi's system prompt. Whatever architectural invariants you document there become your PR review checklist automatically.
+2. **Inline rules (`extra_instructions`)** — pass `extra_instructions:` in `with:` for quick repo-specific checks.
+3. **Full prompt override** — add `.github/pi-review-prompt.md` or `.github/pi-fix-prompt.md` on your default branch to completely replace the built-in prompt while keeping the inline diff publisher and thread sync.
 
 ---
 

@@ -120,14 +120,20 @@ runs:
           echo "npm install failed (attempt $attempt)" >&2
           sleep 20
         done
-        command -v rg > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep; }
+        command -v rg > /dev/null || {
+          if command -v apt-get > /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+          elif command -v brew > /dev/null; then
+            brew install ripgrep
+          fi
+        }
 
         sys_args=()
         if [ -s "$RUNNER_TEMP/rubric.md" ]; then
           sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
         fi
 
-        timeout 900 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+        perl -e 'alarm shift; exec @ARGV' 900 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
           --model "$PI_MODEL" \
           --tools read,bash \
           --no-context-files \
@@ -285,7 +291,13 @@ runs:
           echo "npm install failed (attempt $attempt)" >&2
           sleep 20
         done
-        command -v rg > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep; }
+        command -v rg > /dev/null || {
+          if command -v apt-get > /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+          elif command -v brew > /dev/null; then
+            brew install ripgrep
+          fi
+        }
 
         sys_args=()
         if [ -s "$RUNNER_TEMP/rubric.md" ]; then
@@ -297,7 +309,7 @@ runs:
           tools="read,bash,edit,write"
         fi
 
-        timeout 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+        perl -e 'alarm shift; exec @ARGV' 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
           --model "$PI_MODEL" \
           --tools "$tools" \
           --no-context-files \
