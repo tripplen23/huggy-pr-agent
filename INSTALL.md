@@ -39,16 +39,16 @@ Ask the user which model provider they want **only if** they have not already st
 Check existing repository secrets without reading values:
 
 ```bash
-gh secret list
+gh secret list --repo OWNER/REPO
 ```
 
 - If `OPENCODE_GO_KEY` is missing and Pi is authenticated locally with `opencode-go`, offer or run (with user confirmation):
   ```bash
-  pi auth print-api-key --provider opencode-go | tr -d '\r\n' | gh secret set OPENCODE_GO_KEY
+  pi auth print-api-key --provider opencode-go | tr -d '\r\n' | gh secret set OPENCODE_GO_KEY --repo OWNER/REPO
   ```
 - If using Google Vertex AI and `~/.config/gcloud/pi-vertex-sa.json` exists locally, set `GOOGLE_VERTEX_CREDENTIALS` without printing the file:
   ```bash
-  gh secret set GOOGLE_VERTEX_CREDENTIALS < ~/.config/gcloud/pi-vertex-sa.json
+  gh secret set GOOGLE_VERTEX_CREDENTIALS --repo OWNER/REPO < ~/.config/gcloud/pi-vertex-sa.json
   ```
 - Otherwise, give the user the exact `gh secret set <SECRET_NAME>` one-liner to paste their key safely.
 
@@ -129,7 +129,7 @@ jobs:
 2. Do **not** add `author_association` checks to the `command` job's `if:` expression — GitHub redacts concealed organization memberships (`MEMBER` → `CONTRIBUTOR`/`NONE`) in webhook payloads. `tripplen23/huggy-pr-agent@v1` verifies true repository `write`/`maintain`/`admin` permission upstream via `/collaborators/{username}/permission`.
 3. If the repository has an `AGENTS.md` or `CLAUDE.md` on its default branch, `huggy-pr-agent` loads it automatically as the review and fix rubric (`rubric_file` defaults to `AGENTS.md` with automatic fallback to `CLAUDE.md`).
 
-**Done when:** `.github/workflows/huggy.yml` parses cleanly (`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/huggy.yml'))"` or `actionlint`).
+**Done when:** `.github/workflows/huggy.yml` parses cleanly (`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/huggy.yml'))"` or `actionlint`) and contains zero leftover `<FROM_STEP_1>` placeholders (`! grep -q '<FROM_STEP_1>' .github/workflows/huggy.yml`).
 
 ---
 

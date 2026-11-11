@@ -18,7 +18,7 @@ jobs:
       contents: read
       pull-requests: write
     concurrency:
-      group: pi-review-${{ github.event.pull_request.number }}
+      group: huggy-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: tripplen23/huggy-pr-agent@v1
@@ -47,7 +47,7 @@ jobs:
       pull-requests: write
       issues: write
     concurrency:
-      group: pi-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
+      group: huggy-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - uses: actions/setup-node@v4

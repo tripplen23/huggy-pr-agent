@@ -68,10 +68,14 @@ fi
 
 if [ -n "${PI_GCP_PROJECT:-}" ]; then
   export GOOGLE_CLOUD_PROJECT="$PI_GCP_PROJECT"
-  export GOOGLE_CLOUD_LOCATION="${PI_GCP_LOCATION:-global}"
+fi
+if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ] || [ -n "${GCLOUD_PROJECT:-}" ]; then
+  export GOOGLE_CLOUD_LOCATION="${GOOGLE_CLOUD_LOCATION:-${PI_GCP_LOCATION:-global}}"
 fi
 
-if [ -z "${PI_API_KEY:-}" ] && [ -z "${GOOGLE_CLOUD_PROJECT:-}" ] && [ -z "${GOOGLE_CLOUD_API_KEY:-}" ]; then
+key_env_name="${PI_API_KEY_ENV:-OPENCODE_API_KEY}"
+ambient_key="${!key_env_name:-}"
+if [ -z "${PI_API_KEY:-}" ] && [ -z "$ambient_key" ] && [ -z "${GOOGLE_CLOUD_PROJECT:-}" ] && [ -z "${GCLOUD_PROJECT:-}" ] && [ -z "${GOOGLE_CLOUD_API_KEY:-}" ]; then
   echo "No model credentials configured: provide api_key and/or gcp_project (+ gcp_credentials_json or Workload Identity Federation)." >&2
   exit 1
 fi
