@@ -96,10 +96,12 @@ def has_write_permission(
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return False, "not a collaborator (404)"
+        sys.stderr.write(f"warning: collaborator permission check returned HTTP {exc.code}\n")
         if exc.code in {403, 500, 502, 503, 504} and author_association in FALLBACK_ASSOCIATIONS:
             return True, f"author_association={author_association} (API HTTP {exc.code})"
         return False, f"collaborator check HTTP {exc.code}"
-    except Exception as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
+        sys.stderr.write(f"warning: collaborator permission check failed ({exc})\n")
         if author_association in FALLBACK_ASSOCIATIONS:
             return True, f"author_association={author_association} ({exc})"
         return False, f"collaborator check failed ({exc})"
@@ -235,8 +237,9 @@ def main() -> int:
         gql_data = {}
         if os.path.isfile(meta_path):
             try:
-                gql_data = (json.loads(open(meta_path, encoding="utf-8").read()) or {}).get("graphql") or {}
-            except Exception:
+                with open(meta_path, encoding="utf-8") as fh:
+                    gql_data = (json.load(fh) or {}).get("graphql") or {}
+            except (OSError, ValueError):
                 gql_data = {}
         md = build_fix_request_markdown(
             comment_body=body,

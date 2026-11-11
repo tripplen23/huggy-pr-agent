@@ -552,6 +552,63 @@ const count = 1;
         self.assertIn("// The service's own enum decides", req_md)
         self.assertIn("Original finding", req_md)
 
+        # HTTP 403 fallback allows OWNER/MEMBER/COLLABORATOR and denies NONE
+        import io
+        import tempfile
+        import urllib.error
+
+        def raise_403(req, timeout=15):
+            raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", None, io.BytesIO(b""))
+
+        fb_ok, _ = prepare_command.has_write_permission(
+            repo="o/r", username="member", author_association="MEMBER", token="t", opener=raise_403
+        )
+        self.assertTrue(fb_ok)
+        fb_deny, _ = prepare_command.has_write_permission(
+            repo="o/r", username="anon", author_association="NONE", token="t", opener=raise_403
+        )
+        self.assertFalse(fb_deny)
+
+        # End-to-end `main()` authorize contract (`GITHUB_OUTPUT` + `request.txt`)
+        with tempfile.TemporaryDirectory() as tmp:
+            gh_out = os.path.join(tmp, "gh_out.txt")
+            old_env = os.environ.copy()
+            old_argv = sys.argv[:]
+            old_opener = urllib.request.urlopen
+            try:
+                os.environ.update(
+                    {
+                        "RUNNER_TEMP": tmp,
+                        "GITHUB_OUTPUT": gh_out,
+                        "COMMENT_BODY": "@pi remove the redundant comment",
+                        "COMMENT_USER": "tripplen23",
+                        "COMMENT_USER_TYPE": "User",
+                        "COMMENT_ASSOC": "NONE",
+                        "REPO": "HuggerHustle/platform-v2",
+                        "GH_TOKEN": "tok",
+                    }
+                )
+                sys.argv = ["prepare_command.py", "authorize"]
+                prepare_command.has_write_permission.__defaults__ = (
+                    "User",
+                    "",
+                    "",
+                    lambda req, timeout=15: FakeResp('{"permission":"write"}'),
+                )
+                rc = prepare_command.main()
+                self.assertEqual(rc, 0)
+                with open(gh_out, encoding="utf-8") as fh:
+                    out_text = fh.read()
+                self.assertIn("go=true\n", out_text)
+                self.assertIn("cmd=fix\n", out_text)
+                with open(os.path.join(tmp, "request.txt"), encoding="utf-8") as fh:
+                    self.assertEqual(fh.read().strip(), "remove the redundant comment")
+            finally:
+                prepare_command.has_write_permission.__defaults__ = ("User", "", "", old_opener)
+                os.environ.clear()
+                os.environ.update(old_env)
+                sys.argv = old_argv
+
 
 if __name__ == "__main__":
     unittest.main()

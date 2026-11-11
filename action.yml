@@ -552,10 +552,8 @@ runs:
           commit -q -m "pi: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
         remote_url="https://x-access-token:$GH_TOKEN@github.com/$REPO.git"
         if ! git push -q --no-verify "$remote_url" "HEAD:refs/heads/$branch"; then
-          echo "Branch $branch moved while verifying; rebasing onto latest $branch and retrying push..."
-          git fetch -q --no-tags "$remote_url" "+refs/heads/$branch:refs/remotes/origin/pr-branch"
-          git -c user.name=Pi -c user.email=pi@noreply.github.com rebase -q refs/remotes/origin/pr-branch
-          git push -q --no-verify "$remote_url" "HEAD:refs/heads/$branch"
+          answer "The \`$branch\` branch advanced while the verification suite was running, so I did not push an unverified rebase. Reply \`@pi\` again to apply and verify on the new tip."
+          exit 1
         fi
 
         sha=$(git rev-parse --short HEAD)
@@ -616,12 +614,8 @@ runs:
           existing=$(curl -fsSL -H "$auth" "$api/issues/$PR/comments?per_page=100" \
             | jq -r '.[] | select(.body | startswith("<!-- pi-review")) | .id' | head -n 1 || true)
           if [ -n "$existing" ]; then
-            prev_sha=$(curl -fsSL -H "$auth" "$api/issues/comments/$existing" \
-              | jq -r '.body' | sed -nE 's/^<!-- pi-review sha=([0-9a-fA-F]{7,40}) -->.*/\1/p' | head -n 1 || true)
-            marker="<!-- pi-review -->"
-            [ -n "$prev_sha" ] && marker="<!-- pi-review sha=$prev_sha -->"
-            payload=$(jq -n --arg m "$marker" --arg run "$RUN" \
-              '{body: ($m + "\n## Review by Pi\n\nThis `/review` run did not finish, so any verdict above is from an older commit. The log says why: " + $run)}')
+            payload=$(jq -n --arg run "$RUN" \
+              '{body: ("<!-- pi-review -->\n## Review by Pi\n\nThis `/review` run did not finish, so any verdict above is from an older commit. The log says why: " + $run)}')
             curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
               "$api/issues/comments/$existing" -d "$payload" > /dev/null || true
           fi
