@@ -70,6 +70,61 @@ const c = check(3);
         self.assertIn("```suggestion", f["comment"])
         self.assertNotIn("```suggestion", f["summary"])
 
+    def test_merge_pr_description_preserves_author_notes(self):
+        # 1. Empty existing body -> wrapped block
+        merged1 = post_review.merge_pr_description("", "## Summary\n- Initial")
+        self.assertIn("<!-- pi-description-start -->", merged1)
+        self.assertIn("## Summary\n- Initial", merged1)
+
+        # 2. Existing author notes without markers -> author notes kept on top
+        merged2 = post_review.merge_pr_description("Fixes #42\nScreenshot: ...", "## Summary\n- V1")
+        self.assertTrue(merged2.startswith("Fixes #42\nScreenshot: ..."))
+        self.assertIn("<!-- pi-description-start -->\n## Summary\n- V1\n<!-- pi-description-end -->", merged2)
+
+        # 3. Updating an already-managed block -> replaces only the managed section
+        merged3 = post_review.merge_pr_description(merged2, "## Summary\n- V2")
+        self.assertTrue(merged3.startswith("Fixes #42\nScreenshot: ..."))
+        self.assertNotIn("- V1", merged3)
+        self.assertIn("- V2", merged3)
+
+    def test_find_last_reviewed_sha_and_incremental_context(self):
+        comments = [
+            {"author": {"login": "mallory"}, "body": "<!-- pi-review sha=deadbeef1234 -->\nspoofed"},
+            {"author": {"login": "github-actions"}, "body": "<!-- pi-review sha=a1b2c3d4e5f6 -->\n## Review by Pi"},
+        ]
+        self.assertEqual(fetch_pr_context.find_last_reviewed_sha(comments), "a1b2c3d4e5f6")
+        sample = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "feat: test",
+                        "body": "Body",
+                        "baseRefName": "main",
+                        "headRefName": "feat",
+                        "author": {"login": "alice"},
+                        "commits": {"nodes": []},
+                        "comments": {"nodes": comments},
+                        "reviewThreads": {"nodes": []},
+                    }
+                }
+            }
+        }
+        inc_diff = (
+            "diff --git a/src/b.ts b/src/b.ts\n"
+            "--- a/src/b.ts\n"
+            "+++ b/src/b.ts\n"
+            "@@ -1,1 +1,2 @@\n"
+            " const a = 1;\n"
+            "+const b = 2;\n"
+        )
+        ctx = fetch_pr_context.format_pr_context(
+            sample,
+            incremental_diff_text=inc_diff,
+            last_reviewed_sha="a1b2c3d4e5f6",
+        )
+        self.assertIn("Incremental Changes Since Last Review (`a1b2c3d..HEAD`, 1 files)", ctx)
+        self.assertIn("L2     +const b = 2;", ctx)
+
     def test_cross_hunk_range_disarms_suggestion(self):
         diff = (
             "diff --git a/src/app.ts b/src/app.ts\n"

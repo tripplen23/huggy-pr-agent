@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch PR context, full commit messages, <review_files>, and line-numbered diff."""
+"""Fetch PR context, full commit messages, incremental delta, <review_files>, and line-numbered diff."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import codecs
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.request
 
@@ -28,7 +29,7 @@ query($owner: String!, $name: String!, $pr: Int!) {
           }
         }
       }
-      comments(last: 20) {
+      comments(last: 30) {
         nodes {
           databaseId
           author { login }
@@ -75,6 +76,7 @@ IGNORED_FILE_PATTERNS = (
     r"\.tsbuildinfo$",
 )
 IGNORED_RE = re.compile("|".join(IGNORED_FILE_PATTERNS))
+REVIEW_SHA_RE = re.compile(r"^<!--\s*pi-review(?:\s+sha=([0-9a-fA-F]{7,40}))?\s*-->")
 
 
 def is_ignored_path(path: str) -> bool:
@@ -123,7 +125,6 @@ def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
                 cur_path = p[2:]
                 skip_file = is_ignored_path(cur_path)
             else:
-                # Deleted file (`+++ /dev/null`)
                 cur_path = None
                 skip_file = True
             file_buf.append(line)
@@ -151,16 +152,33 @@ def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
 
 
 def clean_body(text: str, limit: int = 1200) -> str:
-    text = re.sub(r"^<!--\s*pi(?:-review)?\s*-->\s*", "", (text or "").strip())
+    text = re.sub(r"^<!--\s*pi(?:-review(?:\s+sha=[0-9a-fA-F]+)?)?\s*-->\s*", "", (text or "").strip())
+    text = re.sub(r"<!--\s*pi-description-(?:start|end)\s*-->", "", text).strip()
     if len(text) > limit:
         return text[:limit].rstrip() + " …[truncated]"
     return text
+
+
+def find_last_reviewed_sha(issue_comments: list[dict]) -> str | None:
+    """Extract the most recent `sha=...` from the bot's sticky `<!-- pi-review ... -->` comment."""
+    for ic in reversed(issue_comments):
+        if not ic:
+            continue
+        author = (((ic.get("author") or {}).get("login")) or "").lower()
+        if author and author not in ("github-actions", "github-actions[bot]"):
+            continue
+        m = REVIEW_SHA_RE.match((ic.get("body") or "").strip())
+        if m and m.group(1):
+            return m.group(1)
+    return None
 
 
 def format_pr_context(
     data: dict,
     comment_id: int | None = None,
     diff_text: str = "",
+    incremental_diff_text: str = "",
+    last_reviewed_sha: str | None = None,
     annotated_diff_path: str | None = None,
 ) -> str:
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
@@ -205,6 +223,22 @@ def format_pr_context(
         out += ["", "### Current PR Description", "", body]
     else:
         out += ["", "### Current PR Description", "", "*(empty — no PR description provided yet)*"]
+
+    if incremental_diff_text and last_reviewed_sha:
+        inc_files, inc_annotated = annotate_diff(incremental_diff_text)
+        if inc_files and inc_annotated:
+            out += [
+                "",
+                f"### Incremental Changes Since Last Review (`{last_reviewed_sha[:7]}..HEAD`, {len(inc_files)} files)",
+                "This is a follow-up push on an already-reviewed PR. Prioritize:",
+                "1. Checking whether these incremental changes resolved the `Open Review Threads` below.",
+                "2. Checking whether these newly modified lines introduced any new bugs.",
+                "Do NOT invent new low-priority style/nit findings on untouched files from earlier commits:",
+                "",
+                "```diff",
+                inc_annotated[:20000],
+                "```",
+            ]
 
     if diff_text:
         review_files, annotated = annotate_diff(diff_text)
@@ -321,7 +355,7 @@ def format_pr_context(
         if not ic:
             continue
         raw_b = (ic.get("body") or "").strip()
-        if raw_b.startswith("<!-- pi-review -->") or raw_b.startswith("<!-- preview-comment -->"):
+        if raw_b.startswith("<!-- pi-review") or raw_b.startswith("<!-- preview-comment -->"):
             continue
         ic_author = ((ic.get("author") or {}).get("login")) or "user"
         convo.append(f"- **@{ic_author}**: {clean_body(raw_b, limit=600)}")
@@ -331,6 +365,33 @@ def format_pr_context(
 
     out.append("</pr_context>")
     return "\n".join(out) + "\n"
+
+
+def compute_incremental_diff(last_sha: str) -> str:
+    """Return `git diff <last_sha> <PR head>` if last_sha is a reachable commit distinct from the PR head."""
+    try:
+        parents = subprocess.check_output(
+            ["git", "rev-list", "--parents", "-n", "1", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).split()
+        if len(parents) >= 3:
+            head_sha = parents[-1]
+        else:
+            head_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+            ).strip()
+        if head_sha.startswith(last_sha) or last_sha.startswith(head_sha[:7]):
+            return ""
+        if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
+            subprocess.call(["git", "fetch", "-q", "--no-tags", "--depth=20", "origin", last_sha], stderr=subprocess.DEVNULL)
+        if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
+            return ""
+        return subprocess.check_output(
+            ["git", "-c", "core.quotePath=false", "diff", last_sha, head_sha],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return ""
 
 
 def main() -> int:
@@ -366,10 +427,16 @@ def main() -> int:
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        pr_node = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
+        issue_comments = ((pr_node.get("comments") or {}).get("nodes")) or []
+        last_sha = find_last_reviewed_sha(issue_comments)
+        inc_diff = compute_incremental_diff(last_sha) if last_sha else ""
         md = format_pr_context(
             data,
             comment_id=comment_id,
             diff_text=diff_text,
+            incremental_diff_text=inc_diff,
+            last_reviewed_sha=last_sha,
             annotated_diff_path=annotated_path,
         )
     except Exception as exc:

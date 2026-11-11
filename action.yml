@@ -26,13 +26,21 @@ inputs:
     required: false
     default: "opencode-go/glm-5.3-flash"
   thinking:
-    description: "Thinking level for review runs (`off`, `minimal`, `low`, `medium`, `high`)."
+    description: "Thinking level (`off`, `minimal`, `low`, `medium`, `high`)."
     required: false
     default: "high"
   pi_version:
     description: "Version or dist-tag of @earendil-works/pi-coding-agent to install."
     required: false
     default: "latest"
+  skip_bots:
+    description: "Skip automatic pull_request reviews when the PR author is a bot (e.g. Renovate, Dependabot)."
+    required: false
+    default: "true"
+  skip_drafts:
+    description: "Skip automatic pull_request reviews while the PR is in draft state."
+    required: false
+    default: "false"
   rubric_file:
     description: "Context file read from the base branch as the review/fix rubric (falls back to CLAUDE.md if absent)."
     required: false
@@ -62,17 +70,60 @@ runs:
   using: "composite"
   steps:
     # -------------------------------------------------------------------------
+    # SHARED CACHE FOR PI CLI
+    # -------------------------------------------------------------------------
+    - name: Resolve concrete Pi CLI version
+      id: pi_ver
+      shell: bash
+      env:
+        PI_VERSION: ${{ inputs.pi_version }}
+      run: |
+        set -euo pipefail
+        resolved=$(npm view "@earendil-works/pi-coding-agent@$PI_VERSION" version 2>/dev/null || printf '%s' "$PI_VERSION")
+        echo "version=$resolved" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Pi CLI installation
+      uses: actions/cache@v4
+      with:
+        path: ~/.pi-cli
+        key: pi-cli-${{ runner.os }}-${{ steps.pi_ver.outputs.version }}
+
+    # -------------------------------------------------------------------------
     # AUTOMATIC PR REVIEW (pull_request event)
     # -------------------------------------------------------------------------
-    - name: Checkout PR merge ref (review)
+    - name: Check whether PR review should run
+      id: gate_review
       if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      shell: bash
+      env:
+        SKIP_BOTS: ${{ inputs.skip_bots }}
+        SKIP_DRAFTS: ${{ inputs.skip_drafts }}
+        PR_USER_TYPE: ${{ github.event.pull_request.user.type }}
+        PR_USER_LOGIN: ${{ github.event.pull_request.user.login }}
+        PR_DRAFT: ${{ github.event.pull_request.draft }}
+      run: |
+        set -euo pipefail
+        if [ "$SKIP_BOTS" = "true" ] && { [ "$PR_USER_TYPE" = "Bot" ] || [[ "$PR_USER_LOGIN" == *"[bot]" ]]; }; then
+          echo "Skipping automatic review for bot PR author ($PR_USER_LOGIN)."
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$SKIP_DRAFTS" = "true" ] && [ "$PR_DRAFT" = "true" ]; then
+          echo "Skipping automatic review for draft PR."
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "go=true" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout PR merge ref (review)
+      if: steps.gate_review.outputs.go == 'true'
       uses: actions/checkout@v4
       with:
         fetch-depth: 2
         token: ${{ inputs.github_token }}
 
     - name: Resolve base branch, rubric and review brief
-      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      if: steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -124,7 +175,7 @@ runs:
         fi
 
     - name: Run Pi (review)
-      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      if: steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
         PI_API_KEY: ${{ inputs.api_key }}
@@ -138,14 +189,19 @@ runs:
         [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
         export "$PI_API_KEY_ENV=$PI_API_KEY"
 
-        for attempt in 1 2 3; do
-          npm i -g --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
-          echo "npm install failed (attempt $attempt)" >&2
-          sleep 20
-        done
+        export PATH="$HOME/.pi-cli/node_modules/.bin:$PATH"
+        if ! command -v pi > /dev/null; then
+          mkdir -p "$HOME/.pi-cli"
+          for attempt in 1 2 3; do
+            npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
+            echo "npm install failed (attempt $attempt)" >&2
+            sleep 20
+          done
+        fi
         command -v rg > /dev/null || {
           if command -v apt-get > /dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -o Dpkg::Options::="--force-unsafe-io" ripgrep
           elif command -v brew > /dev/null; then
             brew install ripgrep
           fi
@@ -179,12 +235,13 @@ runs:
         echo "bytes: $(wc -c < review.md)"
 
     - name: Publish inline review and sticky summary
-      if: (inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request')
+      if: steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         REPO: ${{ github.repository }}
         PR: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
@@ -192,7 +249,7 @@ runs:
         python3 "$ACTION_PATH/scripts/post_review.py"
 
     - name: Replace a stale verdict when review fails
-      if: failure() && ((inputs.mode == 'review') || (inputs.mode == 'auto' && github.event_name == 'pull_request'))
+      if: failure() && steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -202,12 +259,12 @@ runs:
         set -euo pipefail
         auth="Authorization: Bearer $GH_TOKEN"
         api="https://api.github.com/repos/$REPO/issues"
-        marker='<!-- pi-review -->'
+        comments=$(curl -fsSL -H "$auth" "$api/$PR/comments?per_page=100")
+        existing=$(printf '%s' "$comments" | jq -r 'first(.[] | select(.body | startswith("<!-- pi-review")) | .id) // empty')
+        marker=$(printf '%s' "$comments" | jq -r 'first(.[] | select(.body | startswith("<!-- pi-review")) | (.body | split("\n")[0])) // "<!-- pi-review -->"')
         body=$(printf '%s\n## Review by Pi\n\nThis run did not finish, so any verdict above is from an older commit. The log says why: %s/%s/actions/runs/%s' \
           "$marker" "${{ github.server_url }}" "$REPO" "${{ github.run_id }}")
         payload=$(jq -n --arg b "$body" '{body: $b}')
-        existing=$(curl -fsSL -H "$auth" "$api/$PR/comments?per_page=100" \
-          | jq -r --arg m "$marker" 'first(.[] | select(.body | startswith($m)) | .id) // empty')
         if [ -n "$existing" ]; then
           curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
             "$api/comments/$existing" -d "$payload" > /dev/null
@@ -237,7 +294,6 @@ runs:
           | sed 's/^[[:space:]]*//' | grep -v '^>' | grep -v '^[[:space:]]*$' \
           | head -n 1 || true)
 
-        # Normalize `@pi /cmd` -> `/cmd` while keeping `@pi <instruction>` as `fix`.
         stripped=$(printf '%s' "$request" | sed -E 's/^(@pi:?|\/pi)\s+//')
         cmd=""
         case "$request" in
@@ -302,6 +358,7 @@ runs:
         PI_API_KEY_ENV: ${{ inputs.api_key_env }}
         PI_MODEL: ${{ inputs.model }}
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
+        PI_THINKING: ${{ inputs.thinking }}
         PI_VERSION: ${{ inputs.pi_version }}
         RUBRIC_FILE: ${{ inputs.rubric_file }}
         EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
@@ -344,14 +401,19 @@ runs:
           cat "$RUNNER_TEMP/pr-context.md" >> "$RUNNER_TEMP/brief.md"
         fi
 
-        for attempt in 1 2 3; do
-          npm i -g --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
-          echo "npm install failed (attempt $attempt)" >&2
-          sleep 20
-        done
+        export PATH="$HOME/.pi-cli/node_modules/.bin:$PATH"
+        if ! command -v pi > /dev/null; then
+          mkdir -p "$HOME/.pi-cli"
+          for attempt in 1 2 3; do
+            npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
+            echo "npm install failed (attempt $attempt)" >&2
+            sleep 20
+          done
+        fi
         command -v rg > /dev/null || {
           if command -v apt-get > /dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -o Dpkg::Options::="--force-unsafe-io" ripgrep
           elif command -v brew > /dev/null; then
             brew install ripgrep
           fi
@@ -370,9 +432,10 @@ runs:
         run_ok=0
         for candidate in "$PI_MODEL" "$PI_MODEL" "${PI_FALLBACK_MODEL:-}"; do
           [ -n "$candidate" ] || continue
-          echo "Running $CMD with model: $candidate"
+          echo "Running $CMD with model: $candidate (thinking: $PI_THINKING)"
           if perl -e 'alarm shift; exec @ARGV' 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
             --model "$candidate" \
+            --thinking "$PI_THINKING" \
             --tools "$tools" \
             --no-context-files \
             --no-approve --no-session \
@@ -432,15 +495,27 @@ runs:
         }
 
         if [ "$CMD" = "review" ] || [ "$CMD" = "improve" ]; then
+          export HEAD_SHA="$(git rev-parse HEAD)"
           git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
           python3 "$ACTION_PATH/scripts/post_review.py"
           exit 0
         fi
 
         if [ "$CMD" = "describe" ]; then
-          # Update PR body and post the walkthrough as a comment.
-          curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
-            "$api/pulls/$PR" -d "$(jq -n --arg b "$reply" '{body: $b}')" > /dev/null
+          python3 - <<'PY'
+        import json, os, sys, urllib.request
+        sys.path.insert(0, os.path.join(os.environ["ACTION_PATH"], "scripts"))
+        import post_review
+        repo, pr, token = os.environ["REPO"], os.environ["PR"], os.environ["GH_TOKEN"]
+        url = f"https://api.github.com/repos/{repo}/pulls/{pr}"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "Content-Type": "application/json", "User-Agent": "pi-pr-agent"}
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+            existing = (json.loads(r.read().decode("utf-8")) or {}).get("body") or ""
+        reply = open(os.path.join(os.environ["RUNNER_TEMP"], "reply.md"), encoding="utf-8").read()
+        merged = post_review.merge_pr_description(existing, reply)
+        req = urllib.request.Request(url, data=json.dumps({"body": merged}).encode("utf-8"), headers=headers, method="PATCH")
+        urllib.request.urlopen(req, timeout=30).read()
+        PY
           answer "$(printf 'Updated the PR description:\n\n%s' "$reply")"
           exit 0
         fi
@@ -488,7 +563,45 @@ runs:
         git push -q --no-verify "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
           "HEAD:refs/heads/$branch"
 
-        answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$(git rev-parse --short HEAD)" "$branch" "$reply")"
+        sha=$(git rev-parse --short HEAD)
+        answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$sha" "$branch" "$reply")"
+
+        # If the command was posted inside a diff review thread, resolve that thread now.
+        if [ -n "$THREAD" ]; then
+          python3 - <<'PY'
+        import json, os, sys, urllib.request
+        try:
+            owner, name = os.environ["REPO"].split("/", 1)
+            pr = int(os.environ["PR"])
+            cid = int(os.environ["COMMENT_ID"])
+            token = os.environ["GH_TOKEN"]
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "pi-pr-agent"}
+            q = """
+            query($owner: String!, $name: String!, $pr: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $pr) {
+                  reviewThreads(last: 100) {
+                    nodes { id isResolved comments(last: 100) { nodes { databaseId } } }
+                  }
+                }
+              }
+            }
+            """
+            req = urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": q, "variables": {"owner": owner, "name": name, "pr": pr}}).encode("utf-8"), headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                nodes = (((json.loads(resp.read().decode("utf-8")).get("data") or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads", {}).get("nodes") or []
+            for t in nodes:
+                if not t or t.get("isResolved"):
+                    continue
+                ids = {c.get("databaseId") for c in ((t.get("comments") or {}).get("nodes") or []) if c}
+                if cid in ids and t.get("id"):
+                    m = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }"
+                    urllib.request.urlopen(urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": m, "variables": {"id": t["id"]}}).encode("utf-8"), headers=headers, method="POST"), timeout=20).read()
+                    break
+        except Exception as exc:
+            sys.stderr.write(f"warning: could not auto-resolve thread for comment {os.environ.get('COMMENT_ID')} ({exc})\n")
+        PY
+        fi
 
     - name: Report when @pi command fails
       if: failure() && steps.prepare.outputs.go == 'true'

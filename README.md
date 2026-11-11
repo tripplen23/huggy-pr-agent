@@ -166,7 +166,10 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `api_key` | *(required)* | API key for the model provider. |
 | `api_key_env` | `OPENCODE_API_KEY` | Environment variable Pi reads for the provider key (`OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.). |
 | `model` | `opencode-go/deepseek-v4.1-flash` | Model ID passed to `pi --model`. |
-| `thinking` | `high` | Thinking depth for review runs (`off`, `minimal`, `low`, `medium`, `high`). |
+| `fallback_model` | `opencode-go/glm-5.3-flash` | Fallback model tried automatically when `model` is overloaded (`429`/`5xx`). |
+| `thinking` | `high` | Thinking depth (`off`, `minimal`, `low`, `medium`, `high`). |
+| `skip_bots` | `true` | Skip automatic `pull_request` reviews when the PR author is a bot (e.g. Renovate, Dependabot). |
+| `skip_drafts` | `false` | Skip automatic `pull_request` reviews while the PR is in draft state. |
 | `rubric_file` | `AGENTS.md` | File read from the **base** branch as the system-prompt rubric (falls back to `CLAUDE.md` if absent). |
 | `extra_instructions` | `""` | Extra repository-specific review/fix rules appended to the prompt. |
 | `setup_cmd` | `""` | Shell command run in a secret-free step before a `@pi` / `/fix` edit (e.g. `corepack enable pnpm && pnpm install --frozen-lockfile`). |
