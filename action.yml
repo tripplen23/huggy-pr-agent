@@ -320,6 +320,13 @@ runs:
           echo "go=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        if [ "$cmd" = "fix" ] && ! git ls-remote --exit-code "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "refs/heads/$branch" > /dev/null 2>&1; then
+          if [ -n "$THREAD" ]; then reply_url="$api/pulls/$PR/comments/$COMMENT_ID/replies"; else reply_url="$api/issues/$PR/comments"; fi
+          curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
+            "$reply_url" -d "$(jq -n --arg b "Branch \`$branch\` has been deleted on GitHub, so new commits cannot be pushed to this PR yet. Click **Restore branch** on the PR (or push \`$branch\` again), then re-run \`@huggy\`." '{body: $b}')" > /dev/null
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         git init -q .
         git fetch -q --no-tags "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
