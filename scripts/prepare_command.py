@@ -87,7 +87,8 @@ def has_write_permission(
     )
     try:
         with opener(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8")) or {}
+            raw_resp = json.loads(resp.read().decode("utf-8"))
+        data = raw_resp if isinstance(raw_resp, dict) else {}
         perm = str(data.get("permission") or "").lower()
         role = str(data.get("role_name") or "").lower()
         if perm in WRITE_PERMISSIONS or role in WRITE_PERMISSIONS:
@@ -100,7 +101,7 @@ def has_write_permission(
         if exc.code in {403, 500, 502, 503, 504} and author_association in FALLBACK_ASSOCIATIONS:
             return True, f"author_association={author_association} (API HTTP {exc.code})"
         return False, f"collaborator check HTTP {exc.code}"
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         sys.stderr.write(f"warning: collaborator permission check failed ({exc})\n")
         if author_association in FALLBACK_ASSOCIATIONS:
             return True, f"author_association={author_association} ({exc})"

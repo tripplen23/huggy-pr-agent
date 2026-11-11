@@ -249,9 +249,9 @@ def compute_timeout_budget(
         except ValueError:
             total_min = 30
     total_sec = total_min * 60
-    # Cap each single attempt at <= 10m / 42% of the wave budget so a stalled
+    # Cap each single attempt at <= 14m / 45% of the wave budget so a stalled
     # primary socket can never starve retries and `fallback_model`.
-    per_bundle_sec = min(10 * 60, max(4 * 60, int((total_sec / waves) * 0.42)))
+    per_bundle_sec = min(14 * 60, max(4 * 60, int((total_sec / waves) * 0.45)))
     return total_sec, per_bundle_sec
 
 
@@ -273,7 +273,12 @@ def invoke_pi(
         if remaining < 25:
             sys.stderr.write(f"[{label}] Timeout budget exhausted before attempt {idx + 1}\n")
             break
-        reserve_for_fallback = 210 if (idx + 1 < len(active_candidates) and remaining > 300) else 0
+        has_distinct_fallback = any(c != candidate for c in active_candidates[idx + 1 :])
+        reserve_for_fallback = (
+            min(210, attempt_timeout_sec + 20)
+            if (has_distinct_fallback and remaining > 260)
+            else 0
+        )
         this_timeout = min(attempt_timeout_sec, max(25, int(remaining - reserve_for_fallback)))
 
         cmd = [

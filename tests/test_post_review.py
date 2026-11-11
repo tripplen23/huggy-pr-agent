@@ -377,11 +377,11 @@ const c = 4;
         huge_total, huge_bundle = run_review.compute_timeout_budget("auto", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
         explicit_total, _ = run_review.compute_timeout_budget("75", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
         self.assertEqual(small_total, 24 * 60)
-        self.assertLessEqual(small_attempt, 10 * 60)
+        self.assertLessEqual(small_attempt, 14 * 60)
         self.assertGreaterEqual(huge_total, 30 * 60)
         self.assertLessEqual(huge_total, 50 * 60)
         self.assertGreaterEqual(huge_bundle, 4 * 60)
-        self.assertLessEqual(huge_bundle, 10 * 60)
+        self.assertLessEqual(huge_bundle, 14 * 60)
         self.assertEqual(explicit_total, 75 * 60)
 
         # Stripping PR description section preserves trailing extra_instructions
