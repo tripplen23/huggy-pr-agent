@@ -76,16 +76,23 @@ const c = check(3);
         self.assertIn("<!-- pi-description-start -->", merged1)
         self.assertIn("## Summary\n- Initial", merged1)
 
-        # 2. Existing author notes without markers -> author notes kept on top
-        merged2 = post_review.merge_pr_description("Fixes #42\nScreenshot: ...", "## Summary\n- V1")
-        self.assertTrue(merged2.startswith("Fixes #42\nScreenshot: ..."))
-        self.assertIn("<!-- pi-description-start -->\n## Summary\n- V1\n<!-- pi-description-end -->", merged2)
+        # 2. Existing author notes around markers -> author notes outside markers kept
+        with_notes = "Fixes #42\n\n" + merged1
+        merged2 = post_review.merge_pr_description(with_notes, "## Summary\n- V2")
+        self.assertTrue(merged2.startswith("Fixes #42"))
+        self.assertNotIn("- Initial", merged2)
+        self.assertIn("- V2", merged2)
 
-        # 3. Updating an already-managed block -> replaces only the managed section
-        merged3 = post_review.merge_pr_description(merged2, "## Summary\n- V2")
-        self.assertTrue(merged3.startswith("Fixes #42\nScreenshot: ..."))
-        self.assertNotIn("- V1", merged3)
-        self.assertIn("- V2", merged3)
+        # 3. Inline `<pr_description>` inside a review finding is NOT treated as a block tag
+        inline_mention = (
+            "## Review by Pi\n\n**Verdict:** nits\n\n"
+            "### `a.py:1` · Low · Inline tag mention\n\n"
+            "Mentioning `<pr_description>` inline must not truncate this finding.\n\n"
+            "<pr_description>\n## Real Block\n</pr_description>\n"
+        )
+        cleaned, desc = post_review.extract_pr_description(inline_mention)
+        self.assertEqual(desc, "## Real Block")
+        self.assertIn("Mentioning `<pr_description>` inline must not truncate this finding.", cleaned)
 
     def test_find_last_reviewed_sha_and_incremental_context(self):
         comments = [

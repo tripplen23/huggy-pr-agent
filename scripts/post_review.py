@@ -25,11 +25,14 @@ HEADER_RE = re.compile(
     r"\*{0,2}`([^`:\n]+):(\d+)(?:-(\d+))?`\*{0,2}"
     r"(?:\s*(?:[·—–-]|\s)\s*(.*))?$"
 )
-PR_DESC_RE = re.compile(r"<pr_description>\s*(.*?)\s*</pr_description>", re.S)
+PR_DESC_RE = re.compile(
+    r"^\s*<pr_description>\s*\r?\n(.*?)\r?\n\s*</pr_description>\s*$",
+    re.M | re.S,
+)
 
 
 def extract_pr_description(text: str) -> tuple[str, str | None]:
-    """Strip `<pr_description>...</pr_description>` from text and return (cleaned_text, new_desc)."""
+    """Strip standalone `<pr_description>...</pr_description>` block and return (cleaned_text, new_desc)."""
     m = PR_DESC_RE.search(text)
     if not m:
         return text, None
@@ -39,8 +42,7 @@ def extract_pr_description(text: str) -> tuple[str, str | None]:
 
 
 def merge_pr_description(existing_body: str, generated_desc: str) -> str:
-    """Insert or update the managed `<!-- pi-description-start -->...<!-- pi-description-end -->` block
-    without destroying author-written notes outside that block."""
+    """Insert or update the managed `<!-- pi-description-start -->...<!-- pi-description-end -->` block."""
     pattern = re.compile(re.escape(DESC_START) + r".*?" + re.escape(DESC_END), re.S)
     cleaned_gen = re.sub(r"<!--\s*pi-description-(?:start|end)\s*-->", "", generated_desc or "").strip()
     block = f"{DESC_START}\n{cleaned_gen}\n{DESC_END}"
@@ -49,7 +51,7 @@ def merge_pr_description(existing_body: str, generated_desc: str) -> str:
         return block
     if pattern.search(existing):
         return pattern.sub(lambda _: block, existing, count=1)
-    return f"{existing}\n\n---\n\n{block}"
+    return block
 
 
 def parse_diff_hunks(diff_text: str) -> dict[tuple[str, int], int]:
