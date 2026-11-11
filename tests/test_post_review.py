@@ -372,14 +372,16 @@ const c = 4;
         giant_bundles = run_review.bundle_review_files(single_giant, max_files=10, max_lines=1800)
         self.assertGreaterEqual(len(giant_bundles), 3)
 
-        # Adaptive timeout scales automatically within the 60m job ceiling (19m..50m)
-        small_total, _ = run_review.compute_timeout_budget("auto", num_bundles=1, total_lines=200, max_parallel=3)
+        # Adaptive timeout scales automatically within the 60m job ceiling (24m..50m)
+        small_total, small_attempt = run_review.compute_timeout_budget("auto", num_bundles=1, total_lines=200, max_parallel=3)
         huge_total, huge_bundle = run_review.compute_timeout_budget("auto", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
         explicit_total, _ = run_review.compute_timeout_budget("75", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
-        self.assertEqual(small_total, 19 * 60)
+        self.assertEqual(small_total, 24 * 60)
+        self.assertLessEqual(small_attempt, 10 * 60)
         self.assertGreaterEqual(huge_total, 30 * 60)
         self.assertLessEqual(huge_total, 50 * 60)
-        self.assertGreaterEqual(huge_bundle, 10 * 60)
+        self.assertGreaterEqual(huge_bundle, 4 * 60)
+        self.assertLessEqual(huge_bundle, 10 * 60)
         self.assertEqual(explicit_total, 75 * 60)
 
         # Stripping PR description section preserves trailing extra_instructions
