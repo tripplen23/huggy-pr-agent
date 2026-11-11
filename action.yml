@@ -106,7 +106,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/.pi-cli
-        key: pi-cli-${{ runner.os }}-${{ steps.pi_ver.outputs.version }}
+        key: pi-cli-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pi_ver.outputs.version }}
 
     # -------------------------------------------------------------------------
     # AUTOMATIC PR REVIEW (pull_request event)
@@ -211,24 +211,8 @@ runs:
         PI_JUDGE_PASS: ${{ inputs.judge_pass }}
       run: |
         set -euo pipefail
-        export PATH="$HOME/.pi-cli/node_modules/.bin:$PATH"
-        if ! command -v pi > /dev/null; then
-          mkdir -p "$HOME/.pi-cli"
-          for attempt in 1 2 3; do
-            npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
-            echo "npm install failed (attempt $attempt)" >&2
-            sleep 20
-          done
-        fi
-        command -v rg > /dev/null || {
-          if command -v apt-get > /dev/null; then
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -o Dpkg::Options::="--force-unsafe-io" ripgrep
-          elif command -v brew > /dev/null; then
-            brew install ripgrep
-          fi
-        }
-
+        # shellcheck disable=SC1091
+        source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
         python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py"
 
     - name: Publish inline review and sticky summary
@@ -378,23 +362,8 @@ runs:
         [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
         export "$PI_API_KEY_ENV=$PI_API_KEY"
 
-        export PATH="$HOME/.pi-cli/node_modules/.bin:$PATH"
-        if ! command -v pi > /dev/null; then
-          mkdir -p "$HOME/.pi-cli"
-          for attempt in 1 2 3; do
-            npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
-            echo "npm install failed (attempt $attempt)" >&2
-            sleep 20
-          done
-        fi
-        command -v rg > /dev/null || {
-          if command -v apt-get > /dev/null; then
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -o Dpkg::Options::="--force-unsafe-io" ripgrep
-          elif command -v brew > /dev/null; then
-            brew install ripgrep
-          fi
-        }
+        # shellcheck disable=SC1091
+        source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
 
         if git cat-file -e "base:$RUBRIC_FILE" 2>/dev/null; then
           git show "base:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
