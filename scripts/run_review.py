@@ -638,7 +638,7 @@ def main() -> int:
             sibling_files=siblings if len(bundles) > 1 else None,
             bundle_label=label,
         )
-        t_template = strip_pr_description_section(brief_template) if (len(bundles) > 1 and idx > 0) else brief_template
+        t_template = strip_pr_description_section(brief_template) if len(bundles) > 1 else brief_template
         full_prompt = f"{t_template}\n\n{ctx_md}" if ctx_md else t_template
         out = invoke_pi(
             prompt_text=full_prompt,

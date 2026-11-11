@@ -12,6 +12,7 @@ if ! command -v pi > /dev/null; then
     echo "npm install failed (attempt $attempt)" >&2
     sleep 15
   done
+  command -v pi > /dev/null || { echo "Failed to install pi CLI after 3 attempts" >&2; exit 1; }
 fi
 
 if ! command -v rg > /dev/null; then

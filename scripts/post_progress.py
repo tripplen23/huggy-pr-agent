@@ -24,6 +24,7 @@ def build_progress_markdown(
     num_bundles: int,
     last_sha: str | None = None,
     svg_url: str = DEFAULT_SVG_URL,
+    previous_body: str = "",
 ) -> str:
     marker = f"<!-- pi-review sha={last_sha} -->" if last_sha else post_review.MARKER
     total_lines = sum(f["changed_lines"] for f in files)
@@ -50,6 +51,19 @@ def build_progress_markdown(
         "",
         "</details>",
     ]
+    prev_clean = fetch_pr_context.clean_body(previous_body, limit=25000)
+    if prev_clean and "Currently reviewing **" not in prev_clean:
+        lines.extend(
+            [
+                "",
+                "<details>",
+                "<summary>📜 <b>Previous review</b></summary>",
+                "",
+                prev_clean,
+                "",
+                "</details>",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -74,7 +88,6 @@ def main() -> int:
     meta = json.loads(open(meta_path, encoding="utf-8").read()) if os.path.isfile(meta_path) else {}
     last_sha = meta.get("last_reviewed_sha")
     bundles = run_review.bundle_review_files(files)
-    body = build_progress_markdown(files, len(bundles), last_sha=last_sha, svg_url=svg_url)
 
     def api(method: str, url: str, payload=None):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -96,12 +109,14 @@ def main() -> int:
     try:
         issues_url = f"https://api.github.com/repos/{repo}/issues"
         comments = api("GET", f"{issues_url}/{pr}/comments?per_page=100") or []
-        existing_id = next(
-            (c["id"] for c in comments if (c.get("body") or "").startswith(post_review.MARKER_PREFIX)),
+        existing = next(
+            (c for c in comments if (c.get("body") or "").startswith(post_review.MARKER_PREFIX)),
             None,
         )
-        if existing_id:
-            api("PATCH", f"{issues_url}/comments/{existing_id}", {"body": body})
+        prev_body = (existing.get("body") or "") if existing else ""
+        body = build_progress_markdown(files, len(bundles), last_sha=last_sha, svg_url=svg_url, previous_body=prev_body)
+        if existing:
+            api("PATCH", f"{issues_url}/comments/{existing['id']}", {"body": body})
         else:
             api("POST", f"{issues_url}/{pr}/comments", {"body": body})
         print(f"Posted in-progress review banner on {repo}#{pr}.")
