@@ -20,7 +20,7 @@ jobs:
         run: |
           npm i -g --no-fund --no-audit @earendil-works/pi-coding-agent@latest
           help_out=$(pi --help)
-          for flag in "--print" "--model" "--thinking" "--tools" "--no-context-files" "--no-approve" "--no-session" "--append-system-prompt"; do
+          for flag in "--print" "--model" "--thinking" "--tools" "--no-tools" "--no-extensions" "--no-mcp" "--no-skills" "--no-context-files" "--no-approve" "--no-session" "--append-system-prompt"; do
             printf '%s\n' "$help_out" | grep -q -- "$flag" || { echo "Missing flag in pi@latest: $flag" >&2; exit 1; }
           done
           echo "Verified pi $(pi --version) CLI flags."

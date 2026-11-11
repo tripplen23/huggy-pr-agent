@@ -33,6 +33,26 @@ inputs:
     description: "Version or dist-tag of @earendil-works/pi-coding-agent to install."
     required: false
     default: "latest"
+  review_tools:
+    description: "Comma-separated Pi tools enabled during read-only PR reviews."
+    required: false
+    default: "read,grep,find,ls"
+  review_timeout_minutes:
+    description: "Review timeout budget in minutes, or 'auto' to scale dynamically with PR size (18m to 50m)."
+    required: false
+    default: "auto"
+  fix_timeout_minutes:
+    description: "Per-attempt timeout in minutes for interactive @pi / /fix commands."
+    required: false
+    default: "25"
+  max_parallel_bundles:
+    description: "Maximum parallel Pi workers when reviewing large multi-bundle PRs."
+    required: false
+    default: "3"
+  judge_pass:
+    description: "Run an independent tool-free fact-checker pass to drop hallucinated or duplicate findings."
+    required: false
+    default: "true"
   skip_bots:
     description: "Skip automatic pull_request reviews when the PR author is a bot (e.g. Renovate, Dependabot)."
     required: false
@@ -86,7 +106,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/.pi-cli
-        key: pi-cli-${{ runner.os }}-${{ steps.pi_ver.outputs.version }}
+        key: pi-cli-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.pi_ver.outputs.version }}
 
     # -------------------------------------------------------------------------
     # AUTOMATIC PR REVIEW (pull_request event)
@@ -122,7 +142,7 @@ runs:
         fetch-depth: 2
         token: ${{ inputs.github_token }}
 
-    - name: Resolve base branch, rubric and review brief
+    - name: Resolve base branch, rubric and review context
       if: steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
@@ -163,22 +183,19 @@ runs:
         fi
 
         if git cat-file -e "base:.github/pi-review-prompt.md" 2>/dev/null; then
-          git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief.md"
+          git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief-template.md"
         else
-          cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief.md"
+          cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief-template.md"
         fi
         if [ -n "$EXTRA_INSTRUCTIONS" ]; then
-          printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief.md"
+          printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief-template.md"
         fi
 
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
-        if [ -s "$RUNNER_TEMP/pr-context.md" ]; then
-          printf '\n\n' >> "$RUNNER_TEMP/brief.md"
-          cat "$RUNNER_TEMP/pr-context.md" >> "$RUNNER_TEMP/brief.md"
-        fi
+        python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
 
-    - name: Run Pi (review)
+    - name: Run Pi (review + judge)
       if: steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
@@ -188,55 +205,15 @@ runs:
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
         PI_VERSION: ${{ inputs.pi_version }}
+        PI_REVIEW_TOOLS: ${{ inputs.review_tools }}
+        PI_REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
+        PI_MAX_PARALLEL_BUNDLES: ${{ inputs.max_parallel_bundles }}
+        PI_JUDGE_PASS: ${{ inputs.judge_pass }}
       run: |
         set -euo pipefail
-        [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
-        export "$PI_API_KEY_ENV=$PI_API_KEY"
-
-        export PATH="$HOME/.pi-cli/node_modules/.bin:$PATH"
-        if ! command -v pi > /dev/null; then
-          mkdir -p "$HOME/.pi-cli"
-          for attempt in 1 2 3; do
-            npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
-            echo "npm install failed (attempt $attempt)" >&2
-            sleep 20
-          done
-        fi
-        command -v rg > /dev/null || {
-          if command -v apt-get > /dev/null; then
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -o Dpkg::Options::="--force-unsafe-io" ripgrep
-          elif command -v brew > /dev/null; then
-            brew install ripgrep
-          fi
-        }
-
-        sys_args=()
-        if [ -s "$RUNNER_TEMP/rubric.md" ]; then
-          sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
-        fi
-
-        run_ok=0
-        for candidate in "$PI_MODEL" "$PI_MODEL" "${PI_FALLBACK_MODEL:-}"; do
-          [ -n "$candidate" ] || continue
-          echo "Running review with model: $candidate (thinking: $PI_THINKING)"
-          if perl -e 'alarm shift; exec @ARGV' 1200 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
-            --model "$candidate" \
-            --thinking "$PI_THINKING" \
-            --tools read,bash \
-            --no-context-files \
-            --no-approve --no-session \
-            "${sys_args[@]}" > review-raw.md && [ -s review-raw.md ]; then
-            run_ok=1
-            break
-          fi
-          echo "Model $candidate failed or was overloaded (429/5xx); backing off 20s before retry/fallback..." >&2
-          sleep 20
-        done
-        [ "$run_ok" -eq 1 ] || { echo "All model attempts failed" >&2; exit 1; }
-
-        perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g' review-raw.md > review.md
-        echo "bytes: $(wc -c < review.md)"
+        # shellcheck disable=SC1091
+        source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
+        python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py"
 
     - name: Publish inline review and sticky summary
       if: steps.gate_review.outputs.go == 'true'
@@ -246,7 +223,6 @@ runs:
         REPO: ${{ github.repository }}
         PR: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
@@ -344,6 +320,9 @@ runs:
 
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
+        if [ "$cmd" = "review" ]; then
+          python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
+        fi
 
     # Runs in its own step with neither GH_TOKEN nor PI_API_KEY in env, so
     # dependency lifecycle scripts (`postinstall`) from the PR branch cannot read
@@ -368,17 +347,23 @@ runs:
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
         PI_VERSION: ${{ inputs.pi_version }}
+        PI_REVIEW_TOOLS: ${{ inputs.review_tools }}
+        PI_REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
+        PI_FIX_TIMEOUT_MINUTES: ${{ inputs.fix_timeout_minutes }}
+        PI_MAX_PARALLEL_BUNDLES: ${{ inputs.max_parallel_bundles }}
+        PI_JUDGE_PASS: ${{ inputs.judge_pass }}
         RUBRIC_FILE: ${{ inputs.rubric_file }}
         EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
         COMMENT_BODY: ${{ github.event.comment.body }}
+        COMMENT_ID: ${{ github.event.comment.id }}
         CMD: ${{ steps.prepare.outputs.cmd }}
-        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
         export "$PI_API_KEY_ENV=$PI_API_KEY"
 
-        printf '%s\n' "$COMMENT_BODY" > .pi-fix-request.md
+        # shellcheck disable=SC1091
+        source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
 
         if git cat-file -e "base:$RUBRIC_FILE" 2>/dev/null; then
           git show "base:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
@@ -388,8 +373,24 @@ runs:
           : > "$RUNNER_TEMP/rubric.md"
         fi
 
+        if [ "$CMD" = "review" ]; then
+          if git cat-file -e "base:.github/pi-review-prompt.md" 2>/dev/null; then
+            git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief-template.md"
+          else
+            cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief-template.md"
+          fi
+          if [ -n "$EXTRA_INSTRUCTIONS" ]; then
+            printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief-template.md"
+          fi
+          python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py"
+          cp review.md "$RUNNER_TEMP/reply.md"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        printf '%s\n' "$COMMENT_BODY" > .pi-fix-request.md
+
         case "$CMD" in
-          review)   cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief.md" ;;
           describe) cp "$RUNNER_TEMP/pi-action/prompts/describe.md" "$RUNNER_TEMP/brief.md" ;;
           improve)  cp "$RUNNER_TEMP/pi-action/prompts/improve.md" "$RUNNER_TEMP/brief.md" ;;
           ask)      cp "$RUNNER_TEMP/pi-action/prompts/ask.md" "$RUNNER_TEMP/brief.md" ;;
@@ -409,45 +410,29 @@ runs:
           cat "$RUNNER_TEMP/pr-context.md" >> "$RUNNER_TEMP/brief.md"
         fi
 
-        export PATH="$HOME/.pi-cli/node_modules/.bin:$PATH"
-        if ! command -v pi > /dev/null; then
-          mkdir -p "$HOME/.pi-cli"
-          for attempt in 1 2 3; do
-            npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@$PI_VERSION" && break
-            echo "npm install failed (attempt $attempt)" >&2
-            sleep 20
-          done
-        fi
-        command -v rg > /dev/null || {
-          if command -v apt-get > /dev/null; then
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -o Dpkg::Options::="--force-unsafe-io" ripgrep
-          elif command -v brew > /dev/null; then
-            brew install ripgrep
-          fi
-        }
-
         sys_args=()
         if [ -s "$RUNNER_TEMP/rubric.md" ]; then
-          sys_args=(--append-system-prompt "$(cat "$RUNNER_TEMP/rubric.md")")
+          sys_args=(--append-system-prompt "$RUNNER_TEMP/rubric.md")
         fi
 
-        tools="read,bash"
+        tools="read,grep,find,ls,bash"
         if [ "$CMD" = "fix" ]; then
-          tools="read,bash,edit,write"
+          tools="read,grep,find,ls,bash,edit,write"
         fi
 
+        timeout_sec=$(( ${PI_FIX_TIMEOUT_MINUTES:-25} * 60 ))
         run_ok=0
         for candidate in "$PI_MODEL" "$PI_MODEL" "${PI_FALLBACK_MODEL:-}"; do
           [ -n "$candidate" ] || continue
-          echo "Running $CMD with model: $candidate (thinking: $PI_THINKING)"
-          if perl -e 'alarm shift; exec @ARGV' 1800 pi -p "$(cat "$RUNNER_TEMP/brief.md")" \
+          echo "Running $CMD with model: $candidate (thinking: $PI_THINKING, timeout: ${timeout_sec}s)"
+          if perl -e 'alarm shift; exec @ARGV' "$timeout_sec" pi --print \
             --model "$candidate" \
             --thinking "$PI_THINKING" \
             --tools "$tools" \
+            --no-extensions --no-mcp --no-skills \
             --no-context-files \
             --no-approve --no-session \
-            "${sys_args[@]}" | tee .pi-fix-reply.md && [ -s .pi-fix-reply.md ]; then
+            "${sys_args[@]}" < "$RUNNER_TEMP/brief.md" | tee .pi-fix-reply.md && [ -s .pi-fix-reply.md ]; then
             run_ok=1
             break
           fi
@@ -485,7 +470,6 @@ runs:
         THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
         CMD: ${{ steps.prepare.outputs.cmd }}
         GUARDED_PATHS: ${{ inputs.guarded_paths }}
-        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         api="https://api.github.com/repos/$REPO"
@@ -574,7 +558,6 @@ runs:
         sha=$(git rev-parse --short HEAD)
         answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$sha" "$branch" "$reply")"
 
-        # If the command was posted inside a diff review thread, resolve that thread now.
         if [ -n "$THREAD" ]; then
           python3 - <<'PY'
         import json, os, sys, urllib.request
