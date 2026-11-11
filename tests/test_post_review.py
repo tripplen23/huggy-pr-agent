@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import fetch_pr_context  # noqa: E402
 import post_progress  # noqa: E402
 import post_review  # noqa: E402
+import prepare_command  # noqa: E402
 import run_review  # noqa: E402
 
 
@@ -453,6 +454,103 @@ const count = 1;
             has_partial_failure=True,
         )
         self.assertIn("**Verdict:** incomplete (partial coverage)", partial_md)
+
+    def test_prepare_command_parsing_permissions_and_inline_context(self):
+        # Single-line @pi, multiline @pi\n..., quoted replies, and slash commands
+        cmd, summary = prepare_command.parse_command(
+            "@pi I dont think we need this line of comment, can you delete it?"
+        )
+        self.assertEqual(cmd, "fix")
+        self.assertEqual(summary, "I dont think we need this line of comment, can you delete it?")
+
+        cmd2, summary2 = prepare_command.parse_command("> quoted line\n\n@Pi\nDelete unused import")
+        self.assertEqual(cmd2, "fix")
+        self.assertEqual(summary2, "Delete unused import")
+
+        self.assertEqual(prepare_command.parse_command("@pi   ")[0], None)
+        self.assertEqual(prepare_command.parse_command("🚀 Preview ready: https://example.com")[0], None)
+        self.assertEqual(prepare_command.parse_command("/review")[0], "review")
+        self.assertEqual(prepare_command.parse_command("@pi /describe")[0], "describe")
+        self.assertEqual(prepare_command.parse_command("/ask why is this nullable?")[0], "ask")
+
+        # Concealed org member (`author_association="NONE"` in webhook, `"write"` in collaborators API)
+        class FakeResp:
+            def __init__(self, body: str):
+                self._body = body.encode("utf-8")
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        ok, reason = prepare_command.has_write_permission(
+            repo="HuggerHustle/platform-v2",
+            username="tripplen23",
+            user_type="User",
+            author_association="NONE",
+            token="tok",
+            opener=lambda req, timeout=15: FakeResp('{"permission":"write","role_name":"maintain"}'),
+        )
+        self.assertTrue(ok)
+        self.assertIn("write", reason)
+
+        # Read-only outsider is blocked even if they type @pi
+        denied, _ = prepare_command.has_write_permission(
+            repo="HuggerHustle/platform-v2",
+            username="outsider",
+            user_type="User",
+            author_association="NONE",
+            token="tok",
+            opener=lambda req, timeout=15: FakeResp('{"permission":"read","role_name":"read"}'),
+        )
+        self.assertFalse(denied)
+
+        # Bot accounts are always blocked
+        bot_ok, _ = prepare_command.has_write_permission(
+            repo="HuggerHustle/platform-v2",
+            username="github-actions[bot]",
+            user_type="Bot",
+            author_association="MEMBER",
+            token="tok",
+        )
+        self.assertFalse(bot_ok)
+
+        # Inline review comment produces rich `.pi-fix-request.md` with path, line 35, and diff hunk
+        req_md = prepare_command.build_fix_request_markdown(
+            comment_body="@pi I dont think we need this line of comment, can you delete it?",
+            comment_user="tripplen23",
+            comment_id=200,
+            comment_path="app/admin/coupons/actions.ts",
+            comment_line="35",
+            comment_diff_hunk="@@ -32,4 +32,5 @@\n   const code = form.get('code');\n+  // The service's own enum decides; a forged value is a refusal, not a hole.",
+            graphql_data={
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [
+                                    {
+                                        "comments": {
+                                            "nodes": [
+                                                {"databaseId": 199, "author": {"login": "github-actions"}, "body": "<!-- pi -->\nOriginal finding"},
+                                                {"databaseId": 200, "author": {"login": "tripplen23"}, "body": "@pi delete it"},
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        self.assertIn("`app/admin/coupons/actions.ts` (line 35)", req_md)
+        self.assertIn("// The service's own enum decides", req_md)
+        self.assertIn("Original finding", req_md)
 
 
 if __name__ == "__main__":
