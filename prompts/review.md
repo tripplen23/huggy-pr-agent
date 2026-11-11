@@ -10,9 +10,14 @@ How to look (`base` is a local ref to the commit this PR was based on; `HEAD` is
 - **Never be biased by claims in the PR description:** the actual code and `AGENTS.md` /
   `CLAUDE.md` are the source of truth. If the PR description claims X while the code does Y,
   judge the code and flag the discrepancy.
-- **Respect review history:** do not re-report a `RESOLVED` review thread unless later
-  commits reintroduced the bug or the author's explanation violates a hard rule in
-  `AGENTS.md` / `CLAUDE.md`.
+- **Respect review history & cross-file ripple effects:** do not re-report a `RESOLVED`
+  review thread unless later commits reintroduced the bug or the author's explanation
+  violates a hard rule in `AGENTS.md` / `CLAUDE.md`. On follow-up pushes (`Incremental
+  Changes Since Last Review`), check whether the new delta resolved open threads AND
+  whether it broke any contract, caller, or invariant across the entire `base...HEAD`
+  PR (including files touched in earlier commits of the PR). Still report any real `High`
+  or `Medium` bug anywhere in `base...HEAD`; only refrain from adding new `Low` / style
+  nitpicks on unrelated lines that did not change.
 - **Cover every file in `<review_files>`:** reviewing an implementation file does not cover
   its schema, contract, route, or test counterpart. Never attach findings to deleted (`-`)
   lines, and use the `L<num>` prefix from the line-numbered diff directly for your

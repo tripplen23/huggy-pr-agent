@@ -26,6 +26,24 @@ query($owner: String!, $name: String!, $pr: Int!) {
             oid
             messageHeadline
             messageBody
+            statusCheckRollup {
+              state
+              contexts(first: 25) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    name
+                    status
+                    conclusion
+                  }
+                  ... on StatusContext {
+                    context
+                    state
+                    description
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -219,6 +237,30 @@ def format_pr_context(
                     indented = "\n".join(f"    > {ln}" for ln in msg_body.splitlines())
                     out.append(indented)
 
+        last_commit = (commits[-1] or {}).get("commit") or {}
+        rollup = last_commit.get("statusCheckRollup") or {}
+        ctx_nodes = ((rollup.get("contexts") or {}).get("nodes")) or []
+        ci_lines = []
+        for cn in ctx_nodes:
+            if not cn:
+                continue
+            tname = cn.get("__typename")
+            if tname == "CheckRun":
+                cname = (cn.get("name") or "").strip()
+                if not cname or "pi" in cname.lower() or cname == "review":
+                    continue
+                cstatus = cn.get("conclusion") or cn.get("status") or "UNKNOWN"
+                ci_lines.append(f"  - `{cname}`: **{cstatus}**")
+            elif tname == "StatusContext":
+                cname = (cn.get("context") or "").strip()
+                if not cname or "review" in cname.lower():
+                    continue
+                cstate = cn.get("state") or "UNKNOWN"
+                desc = (cn.get("description") or "").strip()
+                ci_lines.append(f"  - `{cname}`: **{cstate}**" + (f" ({desc})" if desc else ""))
+        if ci_lines:
+            out += ["", "### CI & Test Status on Latest Commit", "", *ci_lines]
+
     if body:
         out += ["", "### Current PR Description", "", body]
     else:
@@ -230,10 +272,14 @@ def format_pr_context(
             out += [
                 "",
                 f"### Incremental Changes Since Last Review (`{last_reviewed_sha[:7]}..HEAD`, {len(inc_files)} files)",
-                "This is a follow-up push on an already-reviewed PR. Prioritize:",
-                "1. Checking whether these incremental changes resolved the `Open Review Threads` below.",
-                "2. Checking whether these newly modified lines introduced any new bugs.",
-                "Do NOT invent new low-priority style/nit findings on untouched files from earlier commits:",
+                "This is a follow-up push on an already-reviewed PR. Apply the Hybrid Review Rule:",
+                "1. Verify whether these incremental changes resolved the `Open Review Threads` below.",
+                "2. Check for **cross-file ripple effects** across the full `base...HEAD` diff: if a change in",
+                "   this incremental push broke a caller, contract, schema, or assumption in another file",
+                "   of the PR (even a file not modified in the latest commit), report it.",
+                "3. Still report any real `High` or `Medium` defect anywhere in `base...HEAD` that was",
+                "   masked or missed earlier; only refrain from inventing new `Low` / style nitpicks on",
+                "   untouched lines that were already reviewed:",
                 "",
                 "```diff",
                 inc_annotated[:20000],
