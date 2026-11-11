@@ -135,6 +135,10 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        rm -rf "$RUNNER_TEMP/pi-action"
+        mkdir -p "$RUNNER_TEMP/pi-action"
+        cp -R "$ACTION_PATH/scripts" "$ACTION_PATH/prompts" "$RUNNER_TEMP/pi-action/"
+
         if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
           git branch -f base "HEAD^1"
         else
@@ -161,14 +165,14 @@ runs:
         if git cat-file -e "base:.github/pi-review-prompt.md" 2>/dev/null; then
           git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief.md"
         else
-          cp "$ACTION_PATH/prompts/review.md" "$RUNNER_TEMP/brief.md"
+          cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief.md"
         fi
         if [ -n "$EXTRA_INSTRUCTIONS" ]; then
           printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief.md"
         fi
 
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
-        python3 "$ACTION_PATH/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
+        python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
         if [ -s "$RUNNER_TEMP/pr-context.md" ]; then
           printf '\n\n' >> "$RUNNER_TEMP/brief.md"
           cat "$RUNNER_TEMP/pr-context.md" >> "$RUNNER_TEMP/brief.md"
@@ -246,7 +250,7 @@ runs:
       run: |
         set -euo pipefail
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
-        python3 "$ACTION_PATH/scripts/post_review.py"
+        python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
 
     - name: Replace a stale verdict when review fails
       if: failure() && steps.gate_review.outputs.go == 'true'
@@ -287,6 +291,10 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        rm -rf "$RUNNER_TEMP/pi-action"
+        mkdir -p "$RUNNER_TEMP/pi-action"
+        cp -R "$ACTION_PATH/scripts" "$ACTION_PATH/prompts" "$RUNNER_TEMP/pi-action/"
+
         api="https://api.github.com/repos/$REPO"
         auth="Authorization: Bearer $GH_TOKEN"
 
@@ -335,7 +343,7 @@ runs:
         git branch -f base "$mb"
 
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
-        python3 "$ACTION_PATH/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
+        python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
 
     # Runs in its own step with neither GH_TOKEN nor PI_API_KEY in env, so
     # dependency lifecycle scripts (`postinstall`) from the PR branch cannot read
@@ -381,15 +389,15 @@ runs:
         fi
 
         case "$CMD" in
-          review)   cp "$ACTION_PATH/prompts/review.md" "$RUNNER_TEMP/brief.md" ;;
-          describe) cp "$ACTION_PATH/prompts/describe.md" "$RUNNER_TEMP/brief.md" ;;
-          improve)  cp "$ACTION_PATH/prompts/improve.md" "$RUNNER_TEMP/brief.md" ;;
-          ask)      cp "$ACTION_PATH/prompts/ask.md" "$RUNNER_TEMP/brief.md" ;;
+          review)   cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief.md" ;;
+          describe) cp "$RUNNER_TEMP/pi-action/prompts/describe.md" "$RUNNER_TEMP/brief.md" ;;
+          improve)  cp "$RUNNER_TEMP/pi-action/prompts/improve.md" "$RUNNER_TEMP/brief.md" ;;
+          ask)      cp "$RUNNER_TEMP/pi-action/prompts/ask.md" "$RUNNER_TEMP/brief.md" ;;
           fix)
             if git cat-file -e "base:.github/pi-fix-prompt.md" 2>/dev/null; then
               git show "base:.github/pi-fix-prompt.md" > "$RUNNER_TEMP/brief.md"
             else
-              cp "$ACTION_PATH/prompts/fix.md" "$RUNNER_TEMP/brief.md"
+              cp "$RUNNER_TEMP/pi-action/prompts/fix.md" "$RUNNER_TEMP/brief.md"
             fi
             ;;
         esac
@@ -497,14 +505,14 @@ runs:
         if [ "$CMD" = "review" ] || [ "$CMD" = "improve" ]; then
           export HEAD_SHA="$(git rev-parse HEAD)"
           git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
-          python3 "$ACTION_PATH/scripts/post_review.py"
+          python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
           exit 0
         fi
 
         if [ "$CMD" = "describe" ]; then
           python3 - <<'PY'
         import json, os, sys, urllib.request
-        sys.path.insert(0, os.path.join(os.environ["ACTION_PATH"], "scripts"))
+        sys.path.insert(0, os.path.join(os.environ["RUNNER_TEMP"], "pi-action", "scripts"))
         import post_review
         repo, pr, token = os.environ["REPO"], os.environ["PR"], os.environ["GH_TOKEN"]
         url = f"https://api.github.com/repos/{repo}/pulls/{pr}"
