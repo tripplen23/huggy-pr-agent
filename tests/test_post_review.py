@@ -202,6 +202,15 @@ All good.
                                         "oid": "1234567890",
                                         "messageHeadline": "feat: init",
                                         "messageBody": "Detailed why in commit body.",
+                                        "statusCheckRollup": {
+                                            "state": "FAILURE",
+                                            "contexts": {
+                                                "nodes": [
+                                                    {"__typename": "CheckRun", "name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                                                    {"__typename": "StatusContext", "context": "ci/woodpecker/pr/e2e", "state": "FAILURE", "description": "Pipeline failed"},
+                                                ]
+                                            },
+                                        },
                                     }
                                 }
                             ]
@@ -246,6 +255,9 @@ All good.
         )
         ctx = fetch_pr_context.format_pr_context(sample, comment_id=102, diff_text=diff)
         self.assertIn("Detailed why in commit body.", ctx)
+        self.assertIn("CI & Test Status on Latest Commit", ctx)
+        self.assertIn("`unit-tests`: **SUCCESS**", ctx)
+        self.assertIn("`ci/woodpecker/pr/e2e`: **FAILURE** (Pipeline failed)", ctx)
         self.assertIn("Review Files Checklist (`<review_files>`, 1 files)", ctx)
         self.assertNotIn("pnpm-lock.yaml", ctx)
         self.assertIn("L11    +const y = 2;", ctx)

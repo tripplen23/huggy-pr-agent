@@ -20,7 +20,7 @@
 ## ✨ What It Looks Like on Your PR
 
 <div align="center">
-  <img src="assets/inline-review-preview.svg" alt="Pi PR Agent Inline Review and @pi Fix Preview" width="96%" />
+  <img src="assets/inline-review-preview.png" alt="Pi PR Agent Inline Review and Resolution on GitHub" width="96%" />
 </div>
 
 ---
