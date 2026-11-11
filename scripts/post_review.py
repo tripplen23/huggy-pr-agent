@@ -12,6 +12,9 @@ import urllib.error
 import urllib.request
 
 MARKER = "<!-- pi-review -->"
+MARKER_PREFIX = "<!-- pi-review"
+DESC_START = "<!-- pi-description-start -->"
+DESC_END = "<!-- pi-description-end -->"
 BADGES = {
     "High": "![High](https://img.shields.io/badge/High-dc2626)",
     "Medium": "![Medium](https://img.shields.io/badge/Medium-facc15)",
@@ -33,6 +36,19 @@ def extract_pr_description(text: str) -> tuple[str, str | None]:
     new_desc = m.group(1).strip()
     cleaned = (text[: m.start()] + text[m.end() :]).strip()
     return cleaned, (new_desc or None)
+
+
+def merge_pr_description(existing_body: str, generated_desc: str) -> str:
+    """Insert or update the managed `<!-- pi-description-start -->...<!-- pi-description-end -->` block
+    without destroying author-written notes outside that block."""
+    block = f"{DESC_START}\n{generated_desc.strip()}\n{DESC_END}"
+    existing = (existing_body or "").strip()
+    if not existing:
+        return block
+    pattern = re.compile(re.escape(DESC_START) + r".*?" + re.escape(DESC_END), re.S)
+    if pattern.search(existing):
+        return pattern.sub(lambda _: block, existing, count=1)
+    return f"{existing}\n\n---\n\n{block}"
 
 
 def parse_diff_hunks(diff_text: str) -> dict[tuple[str, int], int]:
@@ -221,7 +237,9 @@ def main() -> int:
     updated_desc = False
     if new_pr_desc:
         try:
-            api("PATCH", f"https://api.github.com/repos/{repo}/pulls/{pr}", {"body": new_pr_desc})
+            pr_obj = api("GET", f"https://api.github.com/repos/{repo}/pulls/{pr}") or {}
+            merged_desc = merge_pr_description(pr_obj.get("body") or "", new_pr_desc)
+            api("PATCH", f"https://api.github.com/repos/{repo}/pulls/{pr}", {"body": merged_desc})
             updated_desc = True
         except Exception as exc:
             sys.stderr.write(f"warning: could not update PR description ({exc})\n")
@@ -354,7 +372,9 @@ def main() -> int:
             sys.stderr.write(f"warning: inline review POST failed ({err_detail}); demoting to sticky\n")
             fallback.extend(summary for _, summary in inline)
 
-    body_parts = [MARKER, "## Review by Pi", "", verdict_line]
+    head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:12]
+    sticky_marker = f"<!-- pi-review sha={head_sha} -->" if head_sha else MARKER
+    body_parts = [sticky_marker, "## Review by Pi", "", verdict_line]
     if intro_lines:
         body_parts += ["", "\n".join(intro_lines)]
     if not findings and not intro_lines and "looks good" not in verdict_line.lower():
@@ -377,7 +397,7 @@ def main() -> int:
     sticky_body = "\n".join(body_parts)[:60000]
     issues_url = f"https://api.github.com/repos/{repo}/issues"
     comments = api("GET", f"{issues_url}/{pr}/comments?per_page=100") or []
-    existing_id = next((c["id"] for c in comments if (c.get("body") or "").startswith(MARKER)), None)
+    existing_id = next((c["id"] for c in comments if (c.get("body") or "").startswith(MARKER_PREFIX)), None)
     if existing_id:
         api("PATCH", f"{issues_url}/comments/{existing_id}", {"body": sticky_body})
     else:
