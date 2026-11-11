@@ -242,14 +242,16 @@ def compute_timeout_budget(
     waves = max(1, math.ceil(max(1, num_bundles) / parallel))
     raw = (timeout_input or "auto").strip().lower()
     if raw in ("", "auto"):
-        total_min = min(50, max(18, 14 + 5 * waves + total_lines // 800))
+        total_min = min(50, max(24, 18 + 5 * waves + total_lines // 800))
     else:
         try:
             total_min = max(5, int(raw))
         except ValueError:
             total_min = 30
     total_sec = total_min * 60
-    per_bundle_sec = min(22 * 60, max(8 * 60, int((total_sec / waves) * 0.85)))
+    # Cap each single attempt at <= 14m / 45% of the wave budget so a stalled
+    # primary socket can never starve retries and `fallback_model`.
+    per_bundle_sec = min(14 * 60, max(4 * 60, int((total_sec / waves) * 0.45)))
     return total_sec, per_bundle_sec
 
 
@@ -265,14 +267,19 @@ def invoke_pi(
     require_verdict: bool = False,
 ) -> str | None:
     """Run `pi --print` with prompt piped via stdin (immune to Linux MAX_ARG_STRLEN)."""
-    for idx, candidate in enumerate(model_candidates):
-        if not candidate:
-            continue
+    active_candidates = [c for c in model_candidates if c]
+    for idx, candidate in enumerate(active_candidates):
         remaining = deadline_monotonic - time.monotonic()
         if remaining < 25:
             sys.stderr.write(f"[{label}] Timeout budget exhausted before attempt {idx + 1}\n")
             break
-        this_timeout = min(attempt_timeout_sec, max(25, int(remaining)))
+        has_distinct_fallback = any(c != candidate for c in active_candidates[idx + 1 :])
+        reserve_for_fallback = (
+            min(210, attempt_timeout_sec + 20)
+            if (has_distinct_fallback and remaining > 260)
+            else 0
+        )
+        this_timeout = min(attempt_timeout_sec, max(25, int(remaining - reserve_for_fallback)))
 
         cmd = [
             "pi",
@@ -323,7 +330,7 @@ def invoke_pi(
         except Exception as exc:
             sys.stderr.write(f"[{label}] Attempt on {candidate} errored: {exc}\n")
 
-        if idx + 1 < len(model_candidates) and (deadline_monotonic - time.monotonic()) > 40:
+        if idx + 1 < len(active_candidates) and (deadline_monotonic - time.monotonic()) > 40:
             backoff = 12.0 + random.uniform(0.0, 8.0)
             time.sleep(backoff)
     return None

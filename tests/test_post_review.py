@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import fetch_pr_context  # noqa: E402
 import post_progress  # noqa: E402
 import post_review  # noqa: E402
+import prepare_command  # noqa: E402
 import run_review  # noqa: E402
 
 
@@ -371,14 +372,16 @@ const c = 4;
         giant_bundles = run_review.bundle_review_files(single_giant, max_files=10, max_lines=1800)
         self.assertGreaterEqual(len(giant_bundles), 3)
 
-        # Adaptive timeout scales automatically within the 60m job ceiling (19m..50m)
-        small_total, _ = run_review.compute_timeout_budget("auto", num_bundles=1, total_lines=200, max_parallel=3)
+        # Adaptive timeout scales automatically within the 60m job ceiling (24m..50m)
+        small_total, small_attempt = run_review.compute_timeout_budget("auto", num_bundles=1, total_lines=200, max_parallel=3)
         huge_total, huge_bundle = run_review.compute_timeout_budget("auto", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
         explicit_total, _ = run_review.compute_timeout_budget("75", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
-        self.assertEqual(small_total, 19 * 60)
+        self.assertEqual(small_total, 24 * 60)
+        self.assertLessEqual(small_attempt, 14 * 60)
         self.assertGreaterEqual(huge_total, 30 * 60)
         self.assertLessEqual(huge_total, 50 * 60)
-        self.assertGreaterEqual(huge_bundle, 10 * 60)
+        self.assertGreaterEqual(huge_bundle, 4 * 60)
+        self.assertLessEqual(huge_bundle, 14 * 60)
         self.assertEqual(explicit_total, 75 * 60)
 
         # Stripping PR description section preserves trailing extra_instructions
@@ -453,6 +456,160 @@ const count = 1;
             has_partial_failure=True,
         )
         self.assertIn("**Verdict:** incomplete (partial coverage)", partial_md)
+
+    def test_prepare_command_parsing_permissions_and_inline_context(self):
+        # Single-line @pi, multiline @pi\n..., quoted replies, and slash commands
+        cmd, summary = prepare_command.parse_command(
+            "@pi I dont think we need this line of comment, can you delete it?"
+        )
+        self.assertEqual(cmd, "fix")
+        self.assertEqual(summary, "I dont think we need this line of comment, can you delete it?")
+
+        cmd2, summary2 = prepare_command.parse_command("> quoted line\n\n@Pi\nDelete unused import")
+        self.assertEqual(cmd2, "fix")
+        self.assertEqual(summary2, "Delete unused import")
+
+        self.assertEqual(prepare_command.parse_command("@pi   ")[0], None)
+        self.assertEqual(prepare_command.parse_command("🚀 Preview ready: https://example.com")[0], None)
+        self.assertEqual(prepare_command.parse_command("/review")[0], "review")
+        self.assertEqual(prepare_command.parse_command("@pi /describe")[0], "describe")
+        self.assertEqual(prepare_command.parse_command("/ask why is this nullable?")[0], "ask")
+
+        # Concealed org member (`author_association="NONE"` in webhook, `"write"` in collaborators API)
+        class FakeResp:
+            def __init__(self, body: str):
+                self._body = body.encode("utf-8")
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        ok, reason = prepare_command.has_write_permission(
+            repo="HuggerHustle/platform-v2",
+            username="tripplen23",
+            user_type="User",
+            author_association="NONE",
+            token="tok",
+            opener=lambda req, timeout=15: FakeResp('{"permission":"write","role_name":"maintain"}'),
+        )
+        self.assertTrue(ok)
+        self.assertIn("write", reason)
+
+        # Read-only outsider is blocked even if they type @pi
+        denied, _ = prepare_command.has_write_permission(
+            repo="HuggerHustle/platform-v2",
+            username="outsider",
+            user_type="User",
+            author_association="NONE",
+            token="tok",
+            opener=lambda req, timeout=15: FakeResp('{"permission":"read","role_name":"read"}'),
+        )
+        self.assertFalse(denied)
+
+        # Bot accounts are always blocked
+        bot_ok, _ = prepare_command.has_write_permission(
+            repo="HuggerHustle/platform-v2",
+            username="github-actions[bot]",
+            user_type="Bot",
+            author_association="MEMBER",
+            token="tok",
+        )
+        self.assertFalse(bot_ok)
+
+        # Inline review comment produces rich `.pi-fix-request.md` with path, line 35, and diff hunk
+        req_md = prepare_command.build_fix_request_markdown(
+            comment_body="@pi I dont think we need this line of comment, can you delete it?",
+            comment_user="tripplen23",
+            comment_id=200,
+            comment_path="app/admin/coupons/actions.ts",
+            comment_line="35",
+            comment_diff_hunk="@@ -32,4 +32,5 @@\n   const code = form.get('code');\n+  // The service's own enum decides; a forged value is a refusal, not a hole.",
+            graphql_data={
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [
+                                    {
+                                        "comments": {
+                                            "nodes": [
+                                                {"databaseId": 199, "author": {"login": "github-actions"}, "body": "<!-- pi -->\nOriginal finding"},
+                                                {"databaseId": 200, "author": {"login": "tripplen23"}, "body": "@pi delete it"},
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        self.assertIn("`app/admin/coupons/actions.ts` (line 35)", req_md)
+        self.assertIn("// The service's own enum decides", req_md)
+        self.assertIn("Original finding", req_md)
+
+        # HTTP 403 fallback allows OWNER/MEMBER/COLLABORATOR and denies NONE
+        import io
+        import tempfile
+        import urllib.error
+
+        def raise_403(req, timeout=15):
+            raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", None, io.BytesIO(b""))
+
+        fb_ok, _ = prepare_command.has_write_permission(
+            repo="o/r", username="member", author_association="MEMBER", token="t", opener=raise_403
+        )
+        self.assertTrue(fb_ok)
+        fb_deny, _ = prepare_command.has_write_permission(
+            repo="o/r", username="anon", author_association="NONE", token="t", opener=raise_403
+        )
+        self.assertFalse(fb_deny)
+
+        # End-to-end `main()` authorize contract (`GITHUB_OUTPUT` + `request.txt`)
+        with tempfile.TemporaryDirectory() as tmp:
+            gh_out = os.path.join(tmp, "gh_out.txt")
+            old_env = os.environ.copy()
+            old_argv = sys.argv[:]
+            old_opener = urllib.request.urlopen
+            try:
+                os.environ.update(
+                    {
+                        "RUNNER_TEMP": tmp,
+                        "GITHUB_OUTPUT": gh_out,
+                        "COMMENT_BODY": "@pi remove the redundant comment",
+                        "COMMENT_USER": "tripplen23",
+                        "COMMENT_USER_TYPE": "User",
+                        "COMMENT_ASSOC": "NONE",
+                        "REPO": "HuggerHustle/platform-v2",
+                        "GH_TOKEN": "tok",
+                    }
+                )
+                sys.argv = ["prepare_command.py", "authorize"]
+                prepare_command.has_write_permission.__defaults__ = (
+                    "User",
+                    "",
+                    "",
+                    lambda req, timeout=15: FakeResp('{"permission":"write"}'),
+                )
+                rc = prepare_command.main()
+                self.assertEqual(rc, 0)
+                with open(gh_out, encoding="utf-8") as fh:
+                    out_text = fh.read()
+                self.assertIn("go=true\n", out_text)
+                self.assertIn("cmd=fix\n", out_text)
+                with open(os.path.join(tmp, "request.txt"), encoding="utf-8") as fh:
+                    self.assertEqual(fh.read().strip(), "remove the redundant comment")
+            finally:
+                prepare_command.has_write_permission.__defaults__ = ("User", "", "", old_opener)
+                os.environ.clear()
+                os.environ.update(old_env)
+                sys.argv = old_argv
 
 
 if __name__ == "__main__":

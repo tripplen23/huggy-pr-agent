@@ -6,8 +6,8 @@
 
 ### Built-in Defenses
 
-1. **Fork Isolation**
-   - Recommended workflows skip review jobs on fork PRs (`github.event.pull_request.head.repo.full_name == github.repository`), and `@pi` write commands only run when `github.event.comment.author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`.
+1. **Fork & Write-Access Isolation**
+   - Recommended workflows skip review jobs on fork PRs (`github.event.pull_request.head.repo.full_name == github.repository`), and interactive `@pi` / slash commands verify actual repository write access (`write`, `maintain`, or `admin` via `/repos/{owner}/{repo}/collaborators/{username}/permission`) before checking out code or running `setup_cmd`.
 2. **Base-Branch Rubric & Action Script Isolation**
    - `AGENTS.md`, `CLAUDE.md`, and custom prompt overrides are read from the `base` branch via `git show base:<path>`.
    - For external callers (`uses: tripplen23/pi-pr-agent@v1`), action scripts and prompts live outside the repository workspace and are snapshotted to `$RUNNER_TEMP/pi-action/` before any `git checkout pr-head` (in this repository's own CI, `uses: ./` intentionally tests the PR's action scripts on `pull_request` while the `command` job pins its checkout to the default branch).
