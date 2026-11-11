@@ -86,6 +86,28 @@ SUGGESTION_BLOCK_RE = re.compile(r"^(\s*```)suggestion[ \t]*\r?\n(.*?)\r?\n(\s*`
 PLACEHOLDER_LINE_RE = re.compile(r"^\s*(?://|#|--|/\*)\s*\.\.\.(?:\s*(?:rest|unchanged|existing).*)?(?:\*/)?\s*$", re.I)
 
 
+def is_safe_rel_path(worktree_root: str, rel_path: str) -> bool:
+    """Return True iff `rel_path` stays strictly inside `worktree_root` (no abs paths, `..`, `.git`, or escaping symlinks)."""
+    if not rel_path or os.path.isabs(rel_path):
+        return False
+    norm_parts = rel_path.replace("\\", "/").split("/")
+    if any(part in ("", ".", "..", ".git") for part in norm_parts):
+        return False
+    root_real = os.path.realpath(worktree_root)
+    candidate = os.path.realpath(os.path.join(root_real, *norm_parts))
+    return candidate.startswith(root_real + os.sep)
+
+
+def safe_worktree_file(worktree_root: str, rel_path: str) -> str | None:
+    """Resolve `rel_path` to an existing regular file strictly inside `worktree_root`."""
+    if not is_safe_rel_path(worktree_root, rel_path):
+        return None
+    root_real = os.path.realpath(worktree_root)
+    norm_parts = rel_path.replace("\\", "/").split("/")
+    candidate = os.path.realpath(os.path.join(root_real, *norm_parts))
+    return candidate if os.path.isfile(candidate) else None
+
+
 def disarm_suggestion(markdown: str) -> str:
     """Turn ```suggestion into a plain code fence when a range cannot be anchored."""
     return re.sub(r"^(\s*```)suggestion\b", r"\1", markdown, flags=re.M)
@@ -97,34 +119,32 @@ def validate_suggestion_against_file(
     start: int,
     end: int,
 ) -> str:
-    """Disarm `suggestion` fences that are no-ops, contain `// ...` placeholders, or truncate balanced blocks."""
-    m = SUGGESTION_BLOCK_RE.search(markdown)
-    if not m:
+    """Validate every `suggestion` block in `markdown`, disarming no-ops, placeholders, or truncated blocks."""
+    if not SUGGESTION_BLOCK_RE.search(markdown):
         return markdown
-    sugg_body = m.group(2)
-    sugg_lines = sugg_body.splitlines()
     if not file_lines or start < 1 or end < start or end > len(file_lines):
         return disarm_suggestion(markdown)
     orig_slice = file_lines[start - 1 : end]
-
-    # 1. Byte-identical no-op suggestion
-    if sugg_lines == orig_slice:
-        return disarm_suggestion(markdown)
-
-    # 2. Ellipsis placeholder lines (`// ...`, `# ... rest unchanged`) not present in original code
     orig_set = {ln.strip() for ln in orig_slice}
-    if any(PLACEHOLDER_LINE_RE.match(ln) and ln.strip() not in orig_set for ln in sugg_lines):
-        return disarm_suggestion(markdown)
+    orig_text = "\n".join(orig_slice)
+    orig_delta = orig_text.count("{") - orig_text.count("}")
 
-    # 3. Multi-line block truncation leaving braces unbalanced when original range was balanced
-    if end - start >= 2:
-        orig_text = "\n".join(orig_slice)
-        orig_delta = orig_text.count("{") - orig_text.count("}")
-        sugg_delta = sugg_body.count("{") - sugg_body.count("}")
-        if orig_delta == 0 and sugg_delta != 0:
-            return disarm_suggestion(markdown)
+    def check_block(m: re.Match) -> str:
+        open_fence, sugg_body, close_fence = m.group(1), m.group(2), m.group(3)
+        sugg_lines = sugg_body.splitlines()
+        disarmed = f"{open_fence}\n{sugg_body}\n{close_fence}"
 
-    return markdown
+        if sugg_lines == orig_slice:
+            return disarmed
+        if any(PLACEHOLDER_LINE_RE.match(ln) and ln.strip() not in orig_set for ln in sugg_lines):
+            return disarmed
+        if end - start >= 1:
+            sugg_delta = sugg_body.count("{") - sugg_body.count("}")
+            if orig_delta == 0 and sugg_delta != 0:
+                return disarmed
+        return m.group(0)
+
+    return SUGGESTION_BLOCK_RE.sub(check_block, markdown)
 
 
 def nearest_hunk_line(
@@ -203,14 +223,16 @@ def parse_review_markdown(
         rest = f["rest"]
         loc = f"`{f['path']}:{f['start']}" + (f"-{f['end']}`" if f["end"] != f["start"] else "`")
         snippet = ""
-        full_path = os.path.join(worktree_root, f["path"])
-        file_lines: list[str] = []
-        if os.path.isfile(full_path):
-            file_lines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
-            cited = file_lines[max(0, f["start"] - 1) : min(len(file_lines), f["end"])]
-            if cited:
-                snippet = "\n```\n" + "\n".join(cited[:6]) + "\n```"
-            body_text = validate_suggestion_against_file(body_text, file_lines, f["start"], f["end"])
+        if not is_safe_rel_path(worktree_root, f["path"]):
+            body_text = disarm_suggestion(body_text)
+        else:
+            full_path = safe_worktree_file(worktree_root, f["path"])
+            if full_path:
+                file_lines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
+                cited = file_lines[max(0, f["start"] - 1) : min(len(file_lines), f["end"])]
+                if cited:
+                    snippet = "\n```\n" + "\n".join(cited[:6]) + "\n```"
+                body_text = validate_suggestion_against_file(body_text, file_lines, f["start"], f["end"])
 
         summary_body = disarm_suggestion(body_text)
         end_hunk = hunk_of.get((f["path"], f["end"]))

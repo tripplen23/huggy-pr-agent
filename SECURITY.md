@@ -10,7 +10,7 @@
    - Recommended workflows skip review jobs on fork PRs (`github.event.pull_request.head.repo.full_name == github.repository`), and `@pi` write commands only run when `github.event.comment.author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR`.
 2. **Base-Branch Rubric & Action Script Isolation**
    - `AGENTS.md`, `CLAUDE.md`, and custom prompt overrides are read from the `base` branch via `git show base:<path>`.
-   - Action scripts and prompts are snapshotted to `$RUNNER_TEMP/pi-action/` before any `git checkout pr-head`.
+   - For external callers (`uses: tripplen23/pi-pr-agent@v1`), action scripts and prompts live outside the repository workspace and are snapshotted to `$RUNNER_TEMP/pi-action/` before any `git checkout pr-head` (in this repository's own CI, `uses: ./` intentionally tests the PR's action scripts on `pull_request` while the `command` job pins its checkout to the default branch).
    - Pi is invoked with `--no-extensions --no-mcp --no-skills --no-context-files --no-approve --no-session`, and read-only PR reviews default to shell-free built-in tools (`--tools read,grep,find,ls`) while the Judge pass runs with `--no-tools`.
 3. **Step-Scoped Secrets**
    - `github_token` (`GH_TOKEN`) is only passed to the checkout/fetch and publish steps — never to the `Run Pi` or `Verify fix` steps.

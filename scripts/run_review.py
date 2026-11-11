@@ -39,6 +39,7 @@ GENERIC_FILENAMES = {
     "client",
     "server",
 }
+COUNTERPART_PREFIX_RE = re.compile(r"^(?:tests?|specs?)[._-]", re.I)
 COUNTERPART_SUFFIX_RE = re.compile(
     r"(?:[._-](?:test|tests|spec|specs|mock|mocks|view|schema|schemas|types|contract|contracts|dto)|Tests|Test|Spec)$"
 )
@@ -49,15 +50,27 @@ def stem_family_key(path: str) -> str:
     """Group implementation, contract, route, and test counterparts under one normalized stem."""
     parts = [p for p in path.replace("\\", "/").split("/") if p]
     base = parts[-1] if parts else path
-    # Strip compound extensions (.test.ts, .d.ts, etc.)
     stem = re.sub(r"\.[a-zA-Z0-9]+$", "", base)
     stem = re.sub(r"\.(?:d|test|spec|stories|gen)$", "", stem, flags=re.I)
-    cleaned = COUNTERPART_SUFFIX_RE.sub("", stem).lower()
+    cleaned = COUNTERPART_PREFIX_RE.sub("", stem)
+    cleaned = COUNTERPART_SUFFIX_RE.sub("", cleaned).lower()
     if cleaned in GENERIC_FILENAMES or len(cleaned) <= 2:
-        # Use nearest meaningful parent directory (skipping [id] or (app) route groups)
         for parent in reversed(parts[:-1]):
             p_clean = re.sub(r"^[\[(]|[\])]$", "", parent).lower()
-            if p_clean and p_clean not in ("src", "app", "lib", "pkg", "internal", "cmd", "api", "v1", "v2", "tests", "test"):
+            if p_clean and p_clean not in (
+                "src",
+                "app",
+                "lib",
+                "pkg",
+                "internal",
+                "cmd",
+                "api",
+                "v1",
+                "v2",
+                "tests",
+                "test",
+                "scripts",
+            ):
                 return p_clean
     return cleaned or base.lower()
 
@@ -67,23 +80,115 @@ def top_dir_key(path: str) -> str:
     return "/".join(parts[:2]) if len(parts) >= 2 else (parts[0] if parts else "")
 
 
+def split_oversized_file(file_entry: dict, max_lines: int = 1800) -> list[dict]:
+    """Split a single file whose diff exceeds `max_lines` across `@@ ` hunk boundaries."""
+    if file_entry["changed_lines"] <= max_lines:
+        return [file_entry]
+
+    lines = file_entry["annotated"].splitlines()
+    header: list[str] = []
+    hunks: list[tuple[int, int, list[str]]] = []
+    cur_hunk: list[str] = []
+    cur_adds = 0
+    cur_dels = 0
+
+    for ln in lines:
+        if ln.startswith("@@ "):
+            if cur_hunk:
+                hunks.append((cur_adds, cur_dels, cur_hunk))
+            cur_hunk = [ln]
+            cur_adds = 0
+            cur_dels = 0
+        elif not hunks and not cur_hunk:
+            header.append(ln)
+        else:
+            cur_hunk.append(ln)
+            if re.match(r"^L\d+\s+\+", ln):
+                cur_adds += 1
+            elif ln.startswith("       -"):
+                cur_dels += 1
+    if cur_hunk:
+        hunks.append((cur_adds, cur_dels, cur_hunk))
+
+    if len(hunks) <= 1:
+        # Single giant hunk: slice body lines into chunks of max_lines
+        body = hunks[0][2] if hunks else lines[len(header) :]
+        hunk_hdr = [body[0]] if body and body[0].startswith("@@ ") else []
+        rest_lines = body[len(hunk_hdr) :]
+        slices: list[dict] = []
+        step = max(200, max_lines)
+        for idx in range(0, len(rest_lines), step):
+            seg = rest_lines[idx : idx + step]
+            s_adds = sum(1 for x in seg if re.match(r"^L\d+\s+\+", x))
+            s_dels = sum(1 for x in seg if x.startswith("       -"))
+            slices.append(
+                {
+                    "path": file_entry["path"],
+                    "additions": s_adds,
+                    "deletions": s_dels,
+                    "changed_lines": max(1, s_adds + s_dels),
+                    "annotated": "\n".join(header + hunk_hdr + seg),
+                }
+            )
+        return slices or [file_entry]
+
+    parts_out: list[dict] = []
+    acc_hunks: list[str] = []
+    acc_adds = 0
+    acc_dels = 0
+    for h_adds, h_dels, h_lines in hunks:
+        h_changed = h_adds + h_dels
+        if acc_hunks and (acc_adds + acc_dels + h_changed > max_lines):
+            parts_out.append(
+                {
+                    "path": file_entry["path"],
+                    "additions": acc_adds,
+                    "deletions": acc_dels,
+                    "changed_lines": max(1, acc_adds + acc_dels),
+                    "annotated": "\n".join(header + acc_hunks),
+                }
+            )
+            acc_hunks = []
+            acc_adds = 0
+            acc_dels = 0
+        acc_hunks.extend(h_lines)
+        acc_adds += h_adds
+        acc_dels += h_dels
+
+    if acc_hunks:
+        parts_out.append(
+            {
+                "path": file_entry["path"],
+                "additions": acc_adds,
+                "deletions": acc_dels,
+                "changed_lines": max(1, acc_adds + acc_dels),
+                "annotated": "\n".join(header + acc_hunks),
+            }
+        )
+    return parts_out
+
+
 def bundle_review_files(
     files: list[dict],
     max_files: int = 10,
     max_lines: int = 1800,
 ) -> list[list[dict]]:
-    """Deterministically pack reviewable files into semantic bundles."""
+    """Deterministically pack reviewable files (and split oversized single files) into semantic bundles."""
     if not files:
         return []
-    total_lines = sum(f["changed_lines"] for f in files)
-    if len(files) <= max_files and total_lines <= max_lines:
-        return [files]
+
+    expanded: list[dict] = []
+    for f in files:
+        expanded.extend(split_oversized_file(f, max_lines=max_lines))
+
+    total_lines = sum(f["changed_lines"] for f in expanded)
+    if len(expanded) <= max_files and total_lines <= max_lines:
+        return [expanded]
 
     families: dict[str, list[dict]] = {}
-    for f in files:
+    for f in expanded:
         families.setdefault(stem_family_key(f["path"]), []).append(f)
 
-    # Split any oversized single family into slices of <= max_files sorted by path
     units: list[tuple[str, str, list[dict]]] = []
     for fkey, members in families.items():
         members_sorted = sorted(members, key=lambda x: x["path"])
@@ -98,26 +203,8 @@ def bundle_review_files(
     cur_lines = 0
 
     for _, _, chunk in units:
-        for item in chunk if len(chunk) == 1 else [None]:
-            pass
         chunk_lines = sum(x["changed_lines"] for x in chunk)
-        if cur_bundle and (len(cur_bundle) + len(chunk) > max_files or cur_lines + chunk_lines > max_lines):
-            # If chunk itself has multiple files exceeding max_lines, pack file-by-file
-            if len(chunk) > 1 and chunk_lines > max_lines:
-                for single in chunk:
-                    s_lines = single["changed_lines"]
-                    if cur_bundle and (len(cur_bundle) + 1 > max_files or cur_lines + s_lines > max_lines):
-                        bundles.append(cur_bundle)
-                        cur_bundle = []
-                        cur_lines = 0
-                    cur_bundle.append(single)
-                    cur_lines += s_lines
-                continue
-            bundles.append(cur_bundle)
-            cur_bundle = []
-            cur_lines = 0
-
-        if not cur_bundle and len(chunk) > 1 and chunk_lines > max_lines:
+        if len(chunk) > 1 and chunk_lines > max_lines:
             for single in chunk:
                 s_lines = single["changed_lines"]
                 if cur_bundle and (len(cur_bundle) + 1 > max_files or cur_lines + s_lines > max_lines):
@@ -126,9 +213,14 @@ def bundle_review_files(
                     cur_lines = 0
                 cur_bundle.append(single)
                 cur_lines += s_lines
-        else:
-            cur_bundle.extend(chunk)
-            cur_lines += chunk_lines
+            continue
+
+        if cur_bundle and (len(cur_bundle) + len(chunk) > max_files or cur_lines + chunk_lines > max_lines):
+            bundles.append(cur_bundle)
+            cur_bundle = []
+            cur_lines = 0
+        cur_bundle.extend(chunk)
+        cur_lines += chunk_lines
 
     if cur_bundle:
         bundles.append(cur_bundle)
@@ -141,19 +233,23 @@ def compute_timeout_budget(
     total_lines: int,
     max_parallel: int,
 ) -> tuple[int, int]:
-    """Return (total_wall_seconds, per_bundle_attempt_seconds)."""
+    """Return (total_wall_seconds, per_bundle_attempt_seconds).
+
+    `auto` caps at 50 minutes so a 60-minute GitHub Actions job always has a 10-minute
+    reserve for the Judge pass and graceful partial-coverage publishing.
+    """
     parallel = max(1, min(max_parallel, max(1, num_bundles)))
     waves = max(1, math.ceil(max(1, num_bundles) / parallel))
     raw = (timeout_input or "auto").strip().lower()
     if raw in ("", "auto"):
-        total_min = min(85, max(20, 15 + 5 * waves + total_lines // 800))
+        total_min = min(50, max(18, 14 + 5 * waves + total_lines // 800))
     else:
         try:
             total_min = max(5, int(raw))
         except ValueError:
             total_min = 30
     total_sec = total_min * 60
-    per_bundle_sec = min(25 * 60, max(8 * 60, int((total_sec / waves) * 0.85)))
+    per_bundle_sec = min(22 * 60, max(8 * 60, int((total_sec / waves) * 0.85)))
     return total_sec, per_bundle_sec
 
 
@@ -283,10 +379,13 @@ def parse_raw_candidates(raw_md: str, worktree_root: str = ".") -> dict:
     if cur:
         candidates.append(cur)
 
+    safe_candidates: list[dict] = []
     for c in candidates:
         body_text = "\n".join(c["body_lines"]).strip()
-        full_path = os.path.join(worktree_root, c["path"])
-        if os.path.isfile(full_path):
+        if not post_review.is_safe_rel_path(worktree_root, c["path"]):
+            continue
+        full_path = post_review.safe_worktree_file(worktree_root, c["path"])
+        if full_path:
             flines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
             body_text = post_review.validate_suggestion_against_file(body_text, flines, c["start"], c["end"])
         c["body_text"] = body_text
@@ -296,13 +395,14 @@ def parse_raw_candidates(raw_md: str, worktree_root: str = ".") -> dict:
         if parts and parts[0].lower() in SEVERITY_RANK:
             sev = parts[0].lower()
         c["severity"] = sev
+        safe_candidates.append(c)
 
     return {
         "verdict": verdict,
         "effort": effort_num,
         "security_attention": sec_attn,
         "intro_lines": intro_lines,
-        "candidates": candidates,
+        "candidates": safe_candidates,
         "pr_description": pr_desc,
     }
 
@@ -348,13 +448,39 @@ def apply_judge_decisions(candidates: list[dict], decisions_obj: dict | None) ->
     return kept
 
 
-def build_judge_input(candidates: list[dict], judge_prompt: str, worktree_root: str = ".") -> str:
-    blocks = [judge_prompt.strip(), "", "## Candidate Findings to Verify", ""]
+def extract_resolved_threads_summary(gql_data: dict) -> list[str]:
+    pr = (((gql_data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
+    threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
+    out: list[str] = []
+    for t in threads:
+        if not t or not t.get("isResolved"):
+            continue
+        c_nodes = ((t.get("comments") or {}).get("nodes")) or []
+        if not c_nodes:
+            continue
+        path = t.get("path") or "unknown"
+        ln = t.get("line") or t.get("originalLine") or "?"
+        summary = fetch_pr_context.clean_body(c_nodes[0].get("body") or "", limit=300)
+        out.append(f"- `{path}:{ln}` [RESOLVED]: {summary}")
+    return out[-15:]
+
+
+def build_judge_input(
+    candidates: list[dict],
+    judge_prompt: str,
+    gql_data: dict | None = None,
+    worktree_root: str = ".",
+) -> str:
+    blocks = [judge_prompt.strip()]
+    resolved_summary = extract_resolved_threads_summary(gql_data or {})
+    if resolved_summary:
+        blocks.extend(["", "## Previously Resolved Threads on This PR", "", *resolved_summary])
+    blocks.extend(["", "## Candidate Findings to Verify", ""])
     for i, c in enumerate(candidates):
         loc = f"{c['path']}:{c['start']}-{c['end']}" if c["start"] != c["end"] else f"{c['path']}:{c['start']}"
-        full_path = os.path.join(worktree_root, c["path"])
+        full_path = post_review.safe_worktree_file(worktree_root, c["path"])
         snippet_lines = []
-        if os.path.isfile(full_path):
+        if full_path:
             flines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
             lo = max(1, c["start"] - 10)
             hi = min(len(flines), c["end"] + 10)
@@ -362,7 +488,7 @@ def build_judge_input(candidates: list[dict], judge_prompt: str, worktree_root: 
                 marker = ">>" if c["start"] <= ln_no <= c["end"] else "  "
                 snippet_lines.append(f"{marker} L{ln_no:<5d} {flines[ln_no - 1]}")
         else:
-            snippet_lines.append("(file does not exist in working tree)")
+            snippet_lines.append("(path not present inside repository worktree)")
 
         blocks.extend(
             [
@@ -386,6 +512,7 @@ def assemble_review_markdown(
     extra_notes: list[str],
     pr_description: str | None,
     max_findings: int = 8,
+    has_partial_failure: bool = False,
 ) -> str:
     ranked = sorted(
         enumerate(candidates),
@@ -394,7 +521,7 @@ def assemble_review_markdown(
     selected = [c for _, c in ranked[:max_findings]]
 
     if not selected:
-        verdict = "looks good"
+        verdict = "incomplete (partial coverage)" if has_partial_failure else "looks good"
         sec_str = "No issues"
     elif any(c.get("severity") in ("high", "medium") for c in selected):
         verdict = "needs changes"
@@ -431,6 +558,16 @@ def redact_secret(text: str, secret: str) -> str:
     return text.replace(secret, "[redacted]")
 
 
+def strip_pr_description_section(template_text: str) -> str:
+    """Remove only the `<pr_description>` instruction block while preserving trailing extra_instructions."""
+    return re.sub(
+        r"\n*Finally, check the `Current PR Description`.*?</pr_description>\s*",
+        "\n\n",
+        template_text,
+        flags=re.S,
+    ).strip()
+
+
 def main() -> int:
     temp = os.environ.get("RUNNER_TEMP", "/tmp")
     api_key = os.environ.get("PI_API_KEY") or ""
@@ -448,6 +585,8 @@ def main() -> int:
     timeout_input = os.environ.get("PI_REVIEW_TIMEOUT_MINUTES") or "auto"
     max_parallel = max(1, int(os.environ.get("PI_MAX_PARALLEL_BUNDLES") or "3"))
     judge_enabled = (os.environ.get("PI_JUDGE_PASS") or "true").strip().lower() == "true"
+    comment_id_raw = os.environ.get("COMMENT_ID") or ""
+    comment_id = int(comment_id_raw) if comment_id_raw.isdigit() else None
 
     brief_template_path = os.path.join(temp, "brief-template.md")
     rubric_path = os.path.join(temp, "rubric.md")
@@ -490,6 +629,7 @@ def main() -> int:
         label = f"Bundle {idx + 1}/{len(bundles)}" if len(bundles) > 1 else ""
         ctx_md = fetch_pr_context.format_pr_context(
             meta.get("graphql") or {},
+            comment_id=comment_id,
             diff_text=diff_text,
             incremental_diff_text=meta.get("incremental_diff") or "",
             last_reviewed_sha=meta.get("last_reviewed_sha"),
@@ -498,15 +638,7 @@ def main() -> int:
             sibling_files=siblings if len(bundles) > 1 else None,
             bundle_label=label,
         )
-        t_template = brief_template
-        if len(bundles) > 1 and idx > 0:
-            # Only Bundle 1 synthesizes `<pr_description>` so parallel workers don't race
-            t_template = re.sub(
-                r"Finally, check the `Current PR Description`.*",
-                "",
-                t_template,
-                flags=re.S,
-            ).strip()
+        t_template = strip_pr_description_section(brief_template) if (len(bundles) > 1 and idx > 0) else brief_template
         full_prompt = f"{t_template}\n\n{ctx_md}" if ctx_md else t_template
         out = invoke_pi(
             prompt_text=full_prompt,
@@ -557,17 +689,16 @@ def main() -> int:
             notes.extend(parsed["intro_lines"])
 
     if failed:
-        missed_paths = [f["path"] for i in failed for f in bundles[i]][:8]
+        missed_paths = list(dict.fromkeys(f["path"] for i in failed for f in bundles[i]))[:8]
         missed_str = ", ".join(f"`{p}`" for p in missed_paths)
         notes.append(
             f"> ⚠️ **Partial coverage:** reviewed {len(succeeded)}/{len(bundles)} file bundles within the timeout budget "
             f"(skipped/timed out on: {missed_str})."
         )
 
-    # Independent Judge / Fact-Checker pass when findings exist and time remains
     if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path) and (deadline - time.monotonic()) > 45:
         judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
-        judge_input = build_judge_input(all_candidates, judge_prompt)
+        judge_input = build_judge_input(all_candidates, judge_prompt, gql_data=meta.get("graphql"))
         judge_models = [m for m in (primary_model, fallback_model) if m]
         judge_raw = invoke_pi(
             prompt_text=judge_input,
@@ -593,6 +724,7 @@ def main() -> int:
         extra_notes=notes,
         pr_description=pr_desc,
         max_findings=max_findings,
+        has_partial_failure=bool(failed),
     )
     final_md = redact_secret(final_md, api_key)
     with open("review.md", "w", encoding="utf-8") as fh:

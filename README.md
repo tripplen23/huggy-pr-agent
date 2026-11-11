@@ -19,6 +19,14 @@
 
 ## ✨ What It Looks Like on Your PR
 
+While a review is running, `pi-pr-agent` posts a live animated progress banner with the review scope, then replaces it in-place with the final verdict:
+
+<div align="center">
+  <img src="assets/pi-reviewing.svg" alt="Pi PR Agent Live Reviewing Animation" width="540" />
+</div>
+
+<br />
+
 <div align="center">
   <img src="assets/inline-review-preview.png" alt="Pi PR Agent Inline Review and Resolution on GitHub" width="96%" />
 </div>
@@ -120,7 +128,7 @@ jobs:
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       github.event.comment.user.type != 'Bot'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: write
       pull-requests: write
@@ -170,8 +178,9 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `model` | `opencode-go/deepseek-v4.1-flash` | Model ID passed to `pi --model`. |
 | `fallback_model` | `opencode-go/glm-5.3-flash` | Fallback model tried automatically when `model` is overloaded (`429`/`5xx`). |
 | `thinking` | `high` | Thinking depth (`off`, `minimal`, `low`, `medium`, `high`). |
-| `review_timeout_minutes` | `auto` | Review timeout budget in minutes, or `auto` to scale dynamically with PR size (20m on small PRs up to 85m on massive multi-bundle PRs). |
-| `fix_timeout_minutes` | `45` | Timeout in minutes for interactive `@pi` / `/fix` commands. |
+| `review_tools` | `read,grep,find,ls` | Built-in Pi tools enabled during read-only PR reviews. |
+| `review_timeout_minutes` | `auto` | Review timeout budget in minutes, or `auto` to scale dynamically with PR size (18m on small PRs up to 50m on massive multi-bundle PRs). |
+| `fix_timeout_minutes` | `25` | Per-attempt timeout in minutes for interactive `@pi` / `/fix` commands. |
 | `max_parallel_bundles` | `3` | Max concurrent Pi workers when reviewing large multi-bundle PRs (> 10 files or > 1,800 changed lines). |
 | `judge_pass` | `true` | Run an independent tool-free fact-checker pass to drop hallucinated or duplicate findings. |
 | `skip_bots` | `true` | Skip automatic `pull_request` reviews when the PR author is a bot (e.g. Renovate, Dependabot). |

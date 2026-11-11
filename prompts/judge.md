@@ -20,8 +20,8 @@ following:
      in the new file.
    - **Duplicate**: two candidates report the exact same underlying defect on the same or
      overlapping lines (keep the clearer/more accurate one, drop the duplicate).
-   - **Already resolved**: the comment repeats a `Previously Resolved` thread from
-     `<pr_context>` without any new regression.
+   - **Already resolved**: the comment repeats an item listed under `Previously Resolved
+     Threads on This PR` without any new regression.
 
 2. **`"disarm_suggestion"`** — Keep the prose finding, but convert its ` ```suggestion `
    fence into a plain code block when the suggestion is NOT a complete, syntactically

@@ -36,7 +36,7 @@ jobs:
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       github.event.comment.user.type != 'Bot'
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: write
       pull-requests: write
