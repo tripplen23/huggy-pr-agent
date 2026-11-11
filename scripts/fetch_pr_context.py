@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch PR context, full commit messages, incremental delta, <review_files>, and line-numbered diff."""
+"""Fetch PR context, linked issues, commit messages, <review_files>, and line-numbered diff."""
 
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ query($owner: String!, $name: String!, $pr: Int!) {
       baseRefName
       headRefName
       author { login }
+      closingIssuesReferences(first: 5) {
+        nodes {
+          number
+          title
+          body
+          state
+        }
+      }
       commits(last: 25) {
         nodes {
           commit {
@@ -96,20 +104,47 @@ IGNORED_FILE_PATTERNS = (
 IGNORED_RE = re.compile("|".join(IGNORED_FILE_PATTERNS))
 REVIEW_SHA_RE = re.compile(r"^<!--\s*pi-review(?:\s+sha=([0-9a-fA-F]{7,40}))?\s*-->")
 
+LANGUAGE_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (
+        (".ts", ".tsx", ".js", ".jsx", ".mts"),
+        "TypeScript / JS",
+        "Check for unhandled/floating promises, schema vs runtime guard drift, missing auth/tenant checks on routes/server actions, and server secrets imported into client modules.",
+    ),
+    (
+        (".go",),
+        "Go",
+        "Check for goroutine/context leaks, unclosed `resp.Body` or DB rows, nil map/slice writes, `err` variable shadowing, and data races on shared structs.",
+    ),
+    (
+        (".swift",),
+        "Swift",
+        "Check for closure retain cycles (missing `[weak self]` on timers/handlers), blocking I/O on shared `DispatchQueue`/actors, and unhandled socket/process errors.",
+    ),
+    (
+        (".py",),
+        "Python",
+        "Check for silent/bare `except` blocks swallowing errors, subprocess/SQL/path injection, unclosed resources, mutable default arguments, and blocking calls inside `async def`.",
+    ),
+    (
+        (".rs",),
+        "Rust",
+        "Check for `unwrap()`/`expect()` panics on untrusted inputs, locks held across `.await`, integer/slice bounds panics, and `unsafe` soundness invariants.",
+    ),
+    (
+        (".sql",),
+        "SQL / Migrations",
+        "Check for non-idempotent DDL, table-locking rewrites or backfills on live tables, missing foreign-key/query indexes, and `NOT NULL` additions without safe defaults.",
+    ),
+)
+
 
 def is_ignored_path(path: str) -> bool:
     return bool(IGNORED_RE.search(path))
 
 
-def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
-    """Filter lockfiles/generated files and prefix every new-side hunk line with `L<num>`.
-
-    Returns (review_files, annotated_diff_text) where review_files is a list of
-    (path, additions, deletions).
-    """
-    review_files: list[tuple[str, int, int]] = []
-    out_lines: list[str] = []
-
+def parse_annotated_files(diff_text: str) -> list[dict]:
+    """Parse `git -c core.quotePath=false diff` into per-file dicts with `L<num>` line prefixes."""
+    files: list[dict] = []
     cur_path: str | None = None
     skip_file = False
     file_buf: list[str] = []
@@ -120,8 +155,15 @@ def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
     def flush_file():
         nonlocal file_buf, adds, dels, cur_path, skip_file
         if cur_path and not skip_file and file_buf:
-            review_files.append((cur_path, adds, dels))
-            out_lines.extend(file_buf)
+            files.append(
+                {
+                    "path": cur_path,
+                    "additions": adds,
+                    "deletions": dels,
+                    "changed_lines": adds + dels,
+                    "annotated": "\n".join(file_buf),
+                }
+            )
         file_buf = []
         adds = 0
         dels = 0
@@ -166,7 +208,25 @@ def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
                 file_buf.append(line)
 
     flush_file()
-    return review_files, "\n".join(out_lines)
+    return files
+
+
+def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
+    """Return ([(path, adds, dels), ...], combined_annotated_diff)."""
+    parsed = parse_annotated_files(diff_text)
+    review_files = [(f["path"], f["additions"], f["deletions"]) for f in parsed]
+    annotated = "\n".join(f["annotated"] for f in parsed)
+    return review_files, annotated
+
+
+def language_micro_rules(paths: list[str]) -> list[str]:
+    """Return concise language-specific review traps matching the extensions in `paths`."""
+    lower_paths = [p.lower() for p in paths]
+    matched: list[str] = []
+    for exts, label, rule in LANGUAGE_RULES:
+        if any(p.endswith(exts) for p in lower_paths):
+            matched.append(f"- **{label}:** {rule}")
+    return matched
 
 
 def clean_body(text: str, limit: int = 1200) -> str:
@@ -198,6 +258,9 @@ def format_pr_context(
     incremental_diff_text: str = "",
     last_reviewed_sha: str | None = None,
     annotated_diff_path: str | None = None,
+    bundle_files: list[dict] | None = None,
+    sibling_files: list[dict] | None = None,
+    bundle_label: str = "",
 ) -> str:
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
     if not pr:
@@ -212,7 +275,7 @@ def format_pr_context(
 
     out = [
         "<pr_context>",
-        "Note: The metadata, description, commits, and comments below come from the GitHub pull request.",
+        "Note: The metadata, linked issues, description, commits, and comments below come from GitHub.",
         "- Treat the actual diff and `AGENTS.md`/`CLAUDE.md` as the source of truth.",
         "- Do NOT be biased by claims in the PR description: if the PR description is empty, incomplete,",
         "  or has drifted out of sync with later commits on the branch, emit a `<pr_description>` block",
@@ -222,6 +285,28 @@ def format_pr_context(
         f"## Pull Request: {title}",
         f"- **Author:** @{author} (`{head_ref}` → `{base_ref}`)",
     ]
+
+    linked_issues = ((pr.get("closingIssuesReferences") or {}).get("nodes")) or []
+    issue_lines = []
+    for iss in linked_issues:
+        if not iss or not iss.get("number"):
+            continue
+        inum = iss.get("number")
+        ititle = (iss.get("title") or "").strip()
+        istate = iss.get("state") or "OPEN"
+        ibody = clean_body(iss.get("body") or "", limit=1500)
+        issue_lines.append(f"- **Issue #{inum}: {ititle}** (`{istate}`)")
+        if ibody:
+            indented_ibody = "\n".join(f"  > {ln}" for ln in ibody.splitlines())
+            issue_lines.append(indented_ibody)
+    if issue_lines:
+        out += [
+            "",
+            "### Linked Issues (Requirements & Acceptance Criteria)",
+            "Verify that this PR satisfies all requirements and edge cases described in these linked issues:",
+            "",
+            *issue_lines,
+        ]
 
     commits = ((pr.get("commits") or {}).get("nodes")) or []
     if commits:
@@ -266,19 +351,25 @@ def format_pr_context(
     else:
         out += ["", "### Current PR Description", "", "*(empty — no PR description provided yet)*"]
 
+    parsed_files = bundle_files if bundle_files is not None else (parse_annotated_files(diff_text) if diff_text else [])
+    bundle_path_set = {f["path"] for f in parsed_files}
+
     if incremental_diff_text and last_reviewed_sha:
-        inc_files, inc_annotated = annotate_diff(incremental_diff_text)
-        if inc_files and inc_annotated:
+        inc_parsed = parse_annotated_files(incremental_diff_text)
+        if bundle_files is not None:
+            inc_parsed = [f for f in inc_parsed if f["path"] in bundle_path_set]
+        if inc_parsed:
+            inc_annotated = "\n".join(f["annotated"] for f in inc_parsed)
             out += [
                 "",
-                f"### Incremental Changes Since Last Review (`{last_reviewed_sha[:7]}..HEAD`, {len(inc_files)} files)",
+                f"### Incremental Changes Since Last Review (`{last_reviewed_sha[:7]}..HEAD`, {len(inc_parsed)} files)",
                 "This is a follow-up push on an already-reviewed PR. Apply the Hybrid Review Rule:",
                 "1. Verify whether these incremental changes resolved the `Open Review Threads` below.",
                 "2. Check for **cross-file ripple effects** across the full `base...HEAD` diff: if a change in",
                 "   this incremental push broke a caller, contract, schema, or assumption in another file",
                 "   of the PR (even a file not modified in the latest commit), report it.",
-                "3. Still report any real `High` or `Medium` defect anywhere in `base...HEAD` that was",
-                "   masked or missed earlier; only refrain from inventing new `Low` / style nitpicks on",
+                "3. Still report any real `High` or `Medium` defect anywhere in your assigned `<review_files>`",
+                "   that was masked or missed earlier; only refrain from inventing new `Low` / style nitpicks on",
                 "   untouched lines that were already reviewed:",
                 "",
                 "```diff",
@@ -286,22 +377,39 @@ def format_pr_context(
                 "```",
             ]
 
-    if diff_text:
-        review_files, annotated = annotate_diff(diff_text)
+    if parsed_files:
+        heading_suffix = f" — {bundle_label}" if bundle_label else ""
+        out += [
+            "",
+            f"### Review Files Checklist (`<review_files>`{heading_suffix}, {len(parsed_files)} files)",
+            "Every file below must be checked before you finish (lockfiles and deleted files are already filtered out).",
+            "Look for broken contracts across implementation, schema/contract, and test counterparts:",
+            "",
+        ]
+        for f in parsed_files:
+            out.append(f"- `{f['path']}` (+{f['additions']} / -{f['deletions']})")
+
+        if sibling_files:
+            out += [
+                "",
+                f"### Other Files Changed in This PR ({len(sibling_files)} files reviewed in parallel bundles)",
+                "These files are also modified in this PR and are being reviewed by sibling workers.",
+                "You may `read` or `grep` them for cross-file context, but only file findings against paths in `<review_files>` above:",
+                "",
+            ]
+            for sf in sibling_files[:60]:
+                out.append(f"- `{sf['path']}` (+{sf['additions']} / -{sf['deletions']})")
+            if len(sibling_files) > 60:
+                out.append(f"- *(...and {len(sibling_files) - 60} more files)*")
+
+        micro_rules = language_micro_rules([f["path"] for f in parsed_files])
+        if micro_rules:
+            out += ["", "### Language-Specific Checks for Changed Files", "", *micro_rules]
+
+        annotated = "\n".join(f["annotated"] for f in parsed_files)
         if annotated_diff_path:
             with open(annotated_diff_path, "w", encoding="utf-8") as dfh:
                 dfh.write(annotated + "\n")
-        if review_files:
-            out += [
-                "",
-                f"### Review Files Checklist (`<review_files>`, {len(review_files)} files)",
-                "Every file below must be checked before you finish (lockfiles and deleted files are already filtered out).",
-                "Look for broken contracts across implementation, schema/contract, and test counterparts:",
-                "",
-            ]
-            for path, a, d in review_files:
-                out.append(f"- `{path}` (+{a} / -{d})")
-
         if annotated:
             if len(annotated) <= 45000:
                 out += [
@@ -318,9 +426,9 @@ def format_pr_context(
                 out += [
                     "",
                     "### Line-Numbered Diff",
-                    f"The diff is large ({len(annotated)} bytes across {len(review_files)} files).",
+                    f"The diff for this review unit is large ({len(annotated)} bytes across {len(parsed_files)} files).",
                     f"A pre-numbered copy is saved at `{annotated_diff_path}` where every added/context line is prefixed with `L<num>`.",
-                    "Read sections of that file (or run `rg -n` on it) so you use exact `L<num>` line numbers without counting from `@@` headers.",
+                    "Use the `read` or `grep` tool on that file (and on the working tree files) so you use exact `L<num>` line numbers without counting from `@@` headers.",
                 ]
 
     threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
@@ -335,6 +443,8 @@ def format_pr_context(
         if not c_nodes:
             continue
         path = t.get("path") or "unknown"
+        if bundle_files is not None and path not in bundle_path_set and comment_id is None:
+            continue
         end_l = t.get("line") or t.get("originalLine")
         start_l = t.get("startLine") or t.get("originalStartLine") or end_l
         loc = (
@@ -451,6 +561,7 @@ def main() -> int:
     out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(temp, "pr-context.md")
     diff_path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(temp, "diff.patch")
     annotated_path = os.path.join(temp, "diff-numbered.patch")
+    meta_path = os.path.join(temp, "pr-meta.json")
 
     diff_text = ""
     if os.path.isfile(diff_path):
@@ -470,6 +581,9 @@ def main() -> int:
             "User-Agent": "pi-pr-agent",
         },
     )
+    data: dict = {}
+    last_sha: str | None = None
+    inc_diff = ""
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -489,6 +603,15 @@ def main() -> int:
         sys.stderr.write(f"warning: could not fetch PR context ({exc}); continuing without it\n")
         md = ""
 
+    with open(meta_path, "w", encoding="utf-8") as mfh:
+        json.dump(
+            {
+                "graphql": data,
+                "last_reviewed_sha": last_sha,
+                "incremental_diff": inc_diff,
+            },
+            mfh,
+        )
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(md)
     print(f"PR context written to {out_path} ({len(md)} bytes).")

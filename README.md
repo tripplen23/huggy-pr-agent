@@ -53,12 +53,14 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
 1. **Deterministic Context Preparation (`scripts/fetch_pr_context.py`)**
    - Reads `AGENTS.md` (or `CLAUDE.md`) from the **base** branch (`git show base:AGENTS.md`) so an untrusted PR cannot rewrite its own review checklist.
    - Filters out lockfiles and generated noise (`pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `*.min.js`, `*.snap`), builds an explicit `<review_files>` checklist, and prefixes every new-side diff line with its exact line number (`L264 + if (existingUser) {`) so the model never miscounts lines from `@@` headers.
-   - Fetches PR title, description, full commit messages (`messageHeadline` + `messageBody`), and open/resolved review threads with author replies into `<pr_context>`.
-2. **Repository-Aware Agent Pass (`pi -p --thinking high`)**
-   - Inspects `<review_files>` and uses `rg` + `read` to verify callers, schemas, contracts, and tests across the repository without running slow builds inside the review container.
-3. **Deterministic Guards & GitHub Sync (`scripts/post_review.py`)**
-   - Validates `start_line..line` against actual diff hunks, snaps minor 1–5 line drift to the nearest hunk, and automatically disarms ` ```suggestion ` fences when a range crosses hunk boundaries so clicking **Commit suggestion** can never corrupt surrounding code.
-   - Auto-resolves prior `<!-- pi -->` threads that have been fixed, updates changed findings in place, syncs stale PR descriptions (`<pr_description>`), and updates the single `<!-- pi-review -->` sticky summary.
+   - Fetches PR title, linked GitHub issues (`closingIssuesReferences`), description, full commit messages, CI check status (`statusCheckRollup`), and open/resolved review threads into `<pr_context>`.
+2. **Smart Parallel Bundling & Shell-Free Agent Pass (`scripts/run_review.py`)**
+   - Small/medium PRs run in a single fast pass; massive PRs (10k+ lines / dozens of files) are deterministically grouped into semantic counterpart bundles (`foo.ts` + `contracts/foo.ts` + `foo.test.ts`) and reviewed concurrently with adaptive timeouts (`review_timeout_minutes: auto`) and graceful partial-coverage recovery.
+   - Runs Pi with shell-free read-only tools (`--tools read,grep,find,ls --thinking high`) to verify callers, contracts, and tests across the full repository.
+3. **Independent Judge Pass & Deterministic Guards (`prompts/judge.md`, `scripts/post_review.py`)**
+   - A fast, tool-free **Fact-Checker / Judge pass** verifies every candidate finding against the exact ground-truth file lines, dropping hallucinations and duplicates before anything reaches GitHub.
+   - Deterministically validates `start_line..line` against diff hunks, snaps minor 1–5 line drift, and disarms no-op, placeholder (`// ...`), or unbalanced ` ```suggestion ` blocks so clicking **Commit suggestion** can never corrupt surrounding code.
+   - Auto-resolves prior `<!-- pi -->` threads once fixed, syncs stale PR descriptions (`<pr_description>`), and updates the single `<!-- pi-review -->` sticky summary.
 
 ---
 
@@ -98,7 +100,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: write
@@ -118,7 +120,7 @@ jobs:
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
       github.event.comment.user.type != 'Bot'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
@@ -168,6 +170,10 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `model` | `opencode-go/deepseek-v4.1-flash` | Model ID passed to `pi --model`. |
 | `fallback_model` | `opencode-go/glm-5.3-flash` | Fallback model tried automatically when `model` is overloaded (`429`/`5xx`). |
 | `thinking` | `high` | Thinking depth (`off`, `minimal`, `low`, `medium`, `high`). |
+| `review_timeout_minutes` | `auto` | Review timeout budget in minutes, or `auto` to scale dynamically with PR size (20m on small PRs up to 85m on massive multi-bundle PRs). |
+| `fix_timeout_minutes` | `45` | Timeout in minutes for interactive `@pi` / `/fix` commands. |
+| `max_parallel_bundles` | `3` | Max concurrent Pi workers when reviewing large multi-bundle PRs (> 10 files or > 1,800 changed lines). |
+| `judge_pass` | `true` | Run an independent tool-free fact-checker pass to drop hallucinated or duplicate findings. |
 | `skip_bots` | `true` | Skip automatic `pull_request` reviews when the PR author is a bot (e.g. Renovate, Dependabot). |
 | `skip_drafts` | `false` | Skip automatic `pull_request` reviews while the PR is in draft state. |
 | `rubric_file` | `AGENTS.md` | File read from the **base** branch as the system-prompt rubric (falls back to `CLAUDE.md` if absent). |

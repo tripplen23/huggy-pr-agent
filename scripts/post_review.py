@@ -82,9 +82,49 @@ def parse_diff_hunks(diff_text: str) -> dict[tuple[str, int], int]:
     return hunk_of
 
 
+SUGGESTION_BLOCK_RE = re.compile(r"^(\s*```)suggestion[ \t]*\r?\n(.*?)\r?\n(\s*```)[ \t]*$", re.M | re.S)
+PLACEHOLDER_LINE_RE = re.compile(r"^\s*(?://|#|--|/\*)\s*\.\.\.(?:\s*(?:rest|unchanged|existing).*)?(?:\*/)?\s*$", re.I)
+
+
 def disarm_suggestion(markdown: str) -> str:
     """Turn ```suggestion into a plain code fence when a range cannot be anchored."""
     return re.sub(r"^(\s*```)suggestion\b", r"\1", markdown, flags=re.M)
+
+
+def validate_suggestion_against_file(
+    markdown: str,
+    file_lines: list[str],
+    start: int,
+    end: int,
+) -> str:
+    """Disarm `suggestion` fences that are no-ops, contain `// ...` placeholders, or truncate balanced blocks."""
+    m = SUGGESTION_BLOCK_RE.search(markdown)
+    if not m:
+        return markdown
+    sugg_body = m.group(2)
+    sugg_lines = sugg_body.splitlines()
+    if not file_lines or start < 1 or end < start or end > len(file_lines):
+        return disarm_suggestion(markdown)
+    orig_slice = file_lines[start - 1 : end]
+
+    # 1. Byte-identical no-op suggestion
+    if sugg_lines == orig_slice:
+        return disarm_suggestion(markdown)
+
+    # 2. Ellipsis placeholder lines (`// ...`, `# ... rest unchanged`) not present in original code
+    orig_set = {ln.strip() for ln in orig_slice}
+    if any(PLACEHOLDER_LINE_RE.match(ln) and ln.strip() not in orig_set for ln in sugg_lines):
+        return disarm_suggestion(markdown)
+
+    # 3. Multi-line block truncation leaving braces unbalanced when original range was balanced
+    if end - start >= 2:
+        orig_text = "\n".join(orig_slice)
+        orig_delta = orig_text.count("{") - orig_text.count("}")
+        sugg_delta = sugg_body.count("{") - sugg_body.count("}")
+        if orig_delta == 0 and sugg_delta != 0:
+            return disarm_suggestion(markdown)
+
+    return markdown
 
 
 def nearest_hunk_line(
@@ -164,11 +204,13 @@ def parse_review_markdown(
         loc = f"`{f['path']}:{f['start']}" + (f"-{f['end']}`" if f["end"] != f["start"] else "`")
         snippet = ""
         full_path = os.path.join(worktree_root, f["path"])
+        file_lines: list[str] = []
         if os.path.isfile(full_path):
             file_lines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
             cited = file_lines[max(0, f["start"] - 1) : min(len(file_lines), f["end"])]
             if cited:
                 snippet = "\n```\n" + "\n".join(cited[:6]) + "\n```"
+            body_text = validate_suggestion_against_file(body_text, file_lines, f["start"], f["end"])
 
         summary_body = disarm_suggestion(body_text)
         end_hunk = hunk_of.get((f["path"], f["end"]))

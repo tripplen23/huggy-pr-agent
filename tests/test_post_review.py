@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import fetch_pr_context  # noqa: E402
 import post_review  # noqa: E402
+import run_review  # noqa: E402
 
 
 class TestPostReview(unittest.TestCase):
@@ -195,6 +196,11 @@ All good.
                         "baseRefName": "master",
                         "headRefName": "feat-socket",
                         "author": {"login": "alice"},
+                        "closingIssuesReferences": {
+                            "nodes": [
+                                {"number": 42, "title": "Socket server must reject unauthenticated frames", "body": "Must refuse frames before hello.", "state": "OPEN"}
+                            ]
+                        },
                         "commits": {
                             "nodes": [
                                 {
@@ -254,6 +260,9 @@ All good.
             " const z = 3;\n"
         )
         ctx = fetch_pr_context.format_pr_context(sample, comment_id=102, diff_text=diff)
+        self.assertIn("Linked Issues (Requirements & Acceptance Criteria)", ctx)
+        self.assertIn("Issue #42: Socket server must reject unauthenticated frames", ctx)
+        self.assertIn("Must refuse frames before hello.", ctx)
         self.assertIn("Detailed why in commit body.", ctx)
         self.assertIn("CI & Test Status on Latest Commit", ctx)
         self.assertIn("`unit-tests`: **SUCCESS**", ctx)
@@ -297,6 +306,107 @@ const c = 4;
     def test_missing_verdict_raises(self):
         with self.assertRaises(ValueError):
             post_review.parse_review_markdown("No verdict here", {})
+
+    def test_validate_suggestion_guards_noop_placeholder_and_truncation(self):
+        file_lines = [
+            "if (existingUser) {",
+            "  if (existingUser.banned) return { error: 'restricted' };",
+            "  targetUserId = existingUser.id;",
+            "  await db.updateTable('user').execute();",
+            "}",
+        ]
+        # 1. Valid balanced replacement -> kept
+        valid_md = "Fix:\n\n```suggestion\nif (existingUser) {\n  return ok();\n}\n```"
+        self.assertIn("```suggestion", post_review.validate_suggestion_against_file(valid_md, file_lines, 1, 5))
+
+        # 2. Byte-identical no-op -> disarmed
+        noop_md = "Fix:\n\n```suggestion\n" + "\n".join(file_lines) + "\n```"
+        self.assertNotIn("```suggestion", post_review.validate_suggestion_against_file(noop_md, file_lines, 1, 5))
+
+        # 3. Ellipsis placeholder -> disarmed
+        placeholder_md = "Fix:\n\n```suggestion\nif (existingUser) {\n  // ... rest unchanged\n}\n```"
+        self.assertNotIn("```suggestion", post_review.validate_suggestion_against_file(placeholder_md, file_lines, 1, 5))
+
+        # 4. Truncated unclosed block (replaces 1..5 with unclosed `if (...) {`) -> disarmed
+        truncated_md = "Fix:\n\n```suggestion\nif (existingUser) {\n  if (existingUser.banned) return;\n```"
+        self.assertNotIn("```suggestion", post_review.validate_suggestion_against_file(truncated_md, file_lines, 1, 5))
+
+    def test_smart_bundling_keeps_counterparts_and_splits_10k_loc_pr(self):
+        # Counterparts share stem_family_key ("inbox")
+        self.assertEqual(run_review.stem_family_key("app/api/v1/inbox/route.ts"), "inbox")
+        self.assertEqual(run_review.stem_family_key("lib/contracts/inbox.ts"), "inbox")
+        self.assertEqual(run_review.stem_family_key("lib/outreach/inbox-view.ts"), "inbox")
+        self.assertEqual(run_review.stem_family_key("tests/inbox.test.ts"), "inbox")
+
+        # 10,000-line PR across 25 modules splits into bounded bundles
+        huge_files = [
+            {"path": f"src/mod_{i}/service_{i}.ts", "additions": 350, "deletions": 50, "changed_lines": 400, "annotated": "..."}
+            for i in range(25)
+        ]
+        bundles = run_review.bundle_review_files(huge_files, max_files=10, max_lines=1800)
+        self.assertGreaterEqual(len(bundles), 6)
+        for b in bundles:
+            self.assertLessEqual(len(b), 10)
+            self.assertLessEqual(sum(x["changed_lines"] for x in b), 1800)
+
+        # Adaptive timeout scales automatically from ~20m on small PRs to ~40m+ on 10k-line PRs
+        small_total, _ = run_review.compute_timeout_budget("auto", num_bundles=1, total_lines=200, max_parallel=3)
+        huge_total, huge_bundle = run_review.compute_timeout_budget("auto", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
+        explicit_total, _ = run_review.compute_timeout_budget("75", num_bundles=len(bundles), total_lines=10000, max_parallel=3)
+        self.assertEqual(small_total, 20 * 60)
+        self.assertGreaterEqual(huge_total, 35 * 60)
+        self.assertGreaterEqual(huge_bundle, 10 * 60)
+        self.assertEqual(explicit_total, 75 * 60)
+
+    def test_judge_decisions_and_verdict_recompute(self):
+        raw = """## Review by Pi
+
+**Verdict:** needs changes
+**Effort:** 4 · **Security:** Needs attention
+
+### `src/a.ts:10-12` · High · Hallucinated missing guard
+
+Guard is missing.
+
+### `src/b.ts:20` · Low · Minor naming nit
+
+```suggestion
+const count = 1;
+```
+"""
+        parsed = run_review.parse_raw_candidates(raw)
+        self.assertEqual(len(parsed["candidates"]), 2)
+        kept = run_review.apply_judge_decisions(
+            parsed["candidates"],
+            {
+                "decisions": [
+                    {"index": 0, "action": "drop", "reason": "guard exists at L8"},
+                    {"index": 1, "action": "disarm_suggestion", "reason": "incomplete"},
+                ]
+            },
+        )
+        self.assertEqual(len(kept), 1)
+        self.assertNotIn("```suggestion", kept[0]["body_text"])
+        final_md = run_review.assemble_review_markdown(
+            candidates=kept,
+            effort=parsed["effort"],
+            security_attention=parsed["security_attention"],
+            extra_notes=[],
+            pr_description=None,
+        )
+        # High was dropped, only Low remains -> Verdict automatically adjusts to `nits`!
+        self.assertIn("**Verdict:** nits", final_md)
+
+        # If all findings are dropped -> Verdict automatically adjusts to `looks good`!
+        clean_md = run_review.assemble_review_markdown(
+            candidates=[],
+            effort=2,
+            security_attention=True,
+            extra_notes=[],
+            pr_description=None,
+        )
+        self.assertIn("**Verdict:** looks good", clean_md)
+        self.assertIn("**Security:** No issues", clean_md)
 
 
 if __name__ == "__main__":
