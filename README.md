@@ -22,7 +22,7 @@
 While a review pipeline is actively running, **Huggy** displays a live animated status card with the review scope — then automatically hides the animation once finished, leaving a clean summary badge and inline diff comments:
 
 <div align="center">
-  <img src="assets/huggy-reviewing.svg" alt="Huggy PR Agent Live Reviewing Animation" width="540" />
+  <img src="assets/huggy-reviewing.svg" alt="Huggy PR Agent Pixel-Art Live Reviewing Animation" width="336" />
 </div>
 
 <br />
