@@ -390,10 +390,11 @@ const c = 4;
         self.assertNotIn("<pr_description>", stripped)
         self.assertIn("Additional repository instructions:\nKeep foo.", stripped)
 
-        # Progress banner preserves sha= and embeds pi-reviewing.svg
+        # Progress banner preserves sha= and embeds huggy-reviewing.svg
         prog = post_progress.build_progress_markdown(huge_files[:2], num_bundles=2, last_sha="abc1234567")
         self.assertTrue(prog.startswith("<!-- pi-review sha=abc1234567 -->"))
-        self.assertIn("pi-reviewing.svg", prog)
+        self.assertIn("huggy-reviewing.svg", prog)
+        self.assertIn("huggy-icon.svg", post_review.REVIEW_HEADING)
         self.assertIn("2 parallel bundles", prog)
 
     def test_judge_decisions_and_verdict_recompute(self):
@@ -468,6 +469,22 @@ const count = 1;
         cmd2, summary2 = prepare_command.parse_command("> quoted line\n\n@Pi\nDelete unused import")
         self.assertEqual(cmd2, "fix")
         self.assertEqual(summary2, "Delete unused import")
+
+        huggy_cmd, huggy_sum = prepare_command.parse_command("@huggy remove the redundant comment")
+        self.assertEqual(huggy_cmd, "fix")
+        self.assertEqual(huggy_sum, "remove the redundant comment")
+        self.assertEqual(prepare_command.parse_command("@huggy /review")[0], "review")
+
+        # GCP private_key redaction guard
+        old_gcp = os.environ.get("PI_GCP_CREDENTIALS_JSON")
+        try:
+            os.environ["PI_GCP_CREDENTIALS_JSON"] = '{"project_id":"p","private_key":"SECRET_PEM_KEY"}'
+            self.assertEqual(run_review.redact_secret("leaked SECRET_PEM_KEY!", ""), "leaked [redacted]!")
+        finally:
+            if old_gcp is None:
+                os.environ.pop("PI_GCP_CREDENTIALS_JSON", None)
+            else:
+                os.environ["PI_GCP_CREDENTIALS_JSON"] = old_gcp
 
         self.assertEqual(prepare_command.parse_command("@pi   ")[0], None)
         self.assertEqual(prepare_command.parse_command("🚀 Preview ready: https://example.com")[0], None)

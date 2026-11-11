@@ -560,9 +560,25 @@ def assemble_review_markdown(
 
 
 def redact_secret(text: str, secret: str) -> str:
-    if not secret:
-        return text
-    return text.replace(secret, "[redacted]")
+    out = text
+    api_env = os.environ.get("PI_API_KEY_ENV") or "OPENCODE_API_KEY"
+    for candidate in (
+        secret,
+        os.environ.get(api_env) or "",
+        os.environ.get("GOOGLE_CLOUD_API_KEY") or "",
+    ):
+        if candidate:
+            out = out.replace(candidate, "[redacted]")
+    gcp_json = os.environ.get("PI_GCP_CREDENTIALS_JSON") or ""
+    if gcp_json:
+        out = out.replace(gcp_json, "[redacted]")
+        try:
+            pk = (json.loads(gcp_json) or {}).get("private_key") or ""
+            if pk:
+                out = out.replace(pk, "[redacted]").replace(pk.replace("\n", "\\n"), "[redacted]")
+        except ValueError:
+            pass
+    return out
 
 
 def strip_pr_description_section(template_text: str) -> str:
@@ -579,10 +595,19 @@ def main() -> int:
     temp = os.environ.get("RUNNER_TEMP", "/tmp")
     api_key = os.environ.get("PI_API_KEY") or ""
     api_key_env = os.environ.get("PI_API_KEY_ENV") or "OPENCODE_API_KEY"
-    if not api_key:
-        sys.stderr.write("PI_API_KEY is empty\n")
+    ambient_key = os.environ.get(api_key_env) or ""
+    gcp_project = (
+        os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("GCLOUD_PROJECT")
+        or os.environ.get("PI_GCP_PROJECT")
+        or ""
+    )
+    gcp_api_key = os.environ.get("GOOGLE_CLOUD_API_KEY") or ""
+    if api_key:
+        os.environ[api_key_env] = api_key
+    elif not ambient_key and not gcp_project and not gcp_api_key:
+        sys.stderr.write("No model credentials configured (PI_API_KEY and GOOGLE_CLOUD_PROJECT are both empty)\n")
         return 1
-    os.environ[api_key_env] = api_key
 
     primary_model = os.environ.get("PI_MODEL") or "opencode-go/deepseek-v4.1-flash"
     fallback_model = os.environ.get("PI_FALLBACK_MODEL") or ""

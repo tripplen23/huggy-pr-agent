@@ -1,4 +1,4 @@
-name: Pi
+name: Huggy
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -18,10 +18,10 @@ jobs:
       contents: read
       pull-requests: write
     concurrency:
-      group: pi-review-${{ github.event.pull_request.number }}
+      group: huggy-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
-      - uses: tripplen23/pi-pr-agent@v1
+      - uses: tripplen23/huggy-pr-agent@v1
         with:
           mode: review
           api_key: ${{ secrets.OPENCODE_GO_KEY }}
@@ -31,7 +31,9 @@ jobs:
       (github.event_name == 'pull_request_review_comment' ||
        (github.event_name == 'issue_comment' && github.event.issue.pull_request)) &&
       github.event.comment.user.type != 'Bot' &&
-      (contains(github.event.comment.body, '@pi') ||
+      (contains(github.event.comment.body, '@huggy') ||
+       contains(github.event.comment.body, '/huggy') ||
+       contains(github.event.comment.body, '@pi') ||
        contains(github.event.comment.body, '/pi') ||
        contains(github.event.comment.body, '/fix') ||
        contains(github.event.comment.body, '/review') ||
@@ -45,13 +47,13 @@ jobs:
       pull-requests: write
       issues: write
     concurrency:
-      group: pi-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
+      group: huggy-cmd-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: tripplen23/pi-pr-agent@v1
+      - uses: tripplen23/huggy-pr-agent@v1
         with:
           mode: comment
           api_key: ${{ secrets.OPENCODE_GO_KEY }}

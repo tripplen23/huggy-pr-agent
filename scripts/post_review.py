@@ -13,6 +13,10 @@ import urllib.request
 
 MARKER = "<!-- pi-review -->"
 MARKER_PREFIX = "<!-- pi-review"
+HUGGY_ICON_URL = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-icon.svg"
+REVIEW_HEADING = (
+    f'## <img src="{HUGGY_ICON_URL}" width="24" height="24" align="absmiddle" alt="Huggy" /> Review by Huggy'
+)
 DESC_START = "<!-- pi-description-start -->"
 DESC_END = "<!-- pi-description-end -->"
 BADGES = {
@@ -441,7 +445,7 @@ def main() -> int:
 
     head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:12]
     sticky_marker = f"<!-- pi-review sha={head_sha} -->" if head_sha else MARKER
-    body_parts = [sticky_marker, "## Review by Pi", "", verdict_line]
+    body_parts = [sticky_marker, REVIEW_HEADING, "", verdict_line]
     if intro_lines:
         body_parts += ["", "\n".join(intro_lines)]
     if not findings and not intro_lines and "looks good" not in verdict_line.lower():
