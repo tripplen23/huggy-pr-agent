@@ -24,11 +24,11 @@ WRITE_PERMISSIONS = {"admin", "maintain", "write"}
 FALLBACK_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("review", re.compile(r"^(?:@pi:?\s+)?/review(?:\b|\s|$)(.*)", re.IGNORECASE | re.DOTALL)),
-    ("describe", re.compile(r"^(?:@pi:?\s+)?/describe(?:\b|\s|$)(.*)", re.IGNORECASE | re.DOTALL)),
-    ("improve", re.compile(r"^(?:@pi:?\s+)?/improve(?:\b|\s|$)(.*)", re.IGNORECASE | re.DOTALL)),
-    ("ask", re.compile(r"^(?:@pi:?\s+)?/ask(?:\s+)(.+)", re.IGNORECASE | re.DOTALL)),
-    ("fix", re.compile(r"^(?:@pi(?::|\b)|/pi\b|/fix\b)[\s:]*(.*)", re.IGNORECASE | re.DOTALL)),
+    ("review", re.compile(r"^(?:@(?:huggy|pi):?\s+)?/review(?:\b|\s|$)(.*)", re.IGNORECASE | re.DOTALL)),
+    ("describe", re.compile(r"^(?:@(?:huggy|pi):?\s+)?/describe(?:\b|\s|$)(.*)", re.IGNORECASE | re.DOTALL)),
+    ("improve", re.compile(r"^(?:@(?:huggy|pi):?\s+)?/improve(?:\b|\s|$)(.*)", re.IGNORECASE | re.DOTALL)),
+    ("ask", re.compile(r"^(?:@(?:huggy|pi):?\s+)?/ask(?:\s+)(.+)", re.IGNORECASE | re.DOTALL)),
+    ("fix", re.compile(r"^(?:@(?:huggy|pi)(?::|\b)|/(?:huggy|pi)\b|/fix\b)[\s:]*(.*)", re.IGNORECASE | re.DOTALL)),
 )
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post or update an animated 'Pi is reviewing...' progress card on the PR sticky comment."""
+"""Post or update an animated 'Huggy is reviewing...' progress card on the PR sticky comment."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import fetch_pr_context  # noqa: E402
 import post_review  # noqa: E402
 import run_review  # noqa: E402
 
-DEFAULT_SVG_URL = "https://raw.githubusercontent.com/tripplen23/pi-pr-agent/v1/assets/pi-reviewing.svg"
+DEFAULT_SVG_URL = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-reviewing.svg"
 
 
 def build_progress_markdown(
@@ -39,10 +39,9 @@ def build_progress_markdown(
 
     lines = [
         marker,
-        "> [!NOTE]",
-        f'> <img src="{svg_url}" alt="Pi is reviewing this PR" width="520" />',
-        ">",
-        f"> Currently reviewing **{len(files)} file(s)** ({total_lines} changed lines){bundle_note}. This may take a minute or two...",
+        f'<img src="{svg_url}" alt="Huggy is reviewing this PR" width="540" />',
+        "",
+        f"<sub>Currently reviewing <b>{len(files)} file(s)</b> ({total_lines} changed lines){bundle_note}. This banner disappears automatically once the review finishes.</sub>",
         "",
         "<details>",
         "<summary>🧭 <b>Review scope</b></summary>",
@@ -52,7 +51,7 @@ def build_progress_markdown(
         "</details>",
     ]
     prev_clean = fetch_pr_context.clean_body(previous_body, limit=25000)
-    if prev_clean and "Currently reviewing **" not in prev_clean:
+    if prev_clean and "Currently reviewing " not in prev_clean:
         lines.extend(
             [
                 "",

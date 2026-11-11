@@ -1,22 +1,35 @@
-name: "Pi PR Agent"
-description: "Code review & PR automation powered by Pi: inline diff reviews, 1-click suggestions, /describe, /improve, /ask, and @pi."
+name: "Huggy PR Agent"
+description: "Repository-aware inline PR reviews, 1-click suggestions, /describe, /improve, /ask, and test-gated @huggy auto-fixes."
 author: "Binh Duc Nguyen"
 branding:
   icon: "git-pull-request"
-  color: "orange"
+  color: "yellow"
 
 inputs:
   mode:
-    description: "What to run: 'auto' (review on pull_request, slash/@pi commands on comments), 'review', or 'comment'."
+    description: "What to run: 'auto' (review on pull_request, slash/@huggy/@pi commands on comments), 'review', or 'comment'."
     required: false
     default: "auto"
   api_key:
-    description: "API key for the chosen model provider (e.g. OpenCode Go key, OpenRouter key)."
-    required: true
+    description: "API key for the chosen model provider (e.g. OpenCode Go, OpenRouter, Anthropic, OpenAI). Optional when using Google Vertex AI (`gcp_project`)."
+    required: false
+    default: ""
   api_key_env:
-    description: "Environment variable name Pi reads for the provider API key."
+    description: "Environment variable name Pi reads for `api_key`."
     required: false
     default: "OPENCODE_API_KEY"
+  gcp_project:
+    description: "Google Cloud project ID when using `google-vertex/*` models (sets `GOOGLE_CLOUD_PROJECT`; auto-detected when `gcp_credentials_json` is provided)."
+    required: false
+    default: ""
+  gcp_location:
+    description: "Google Cloud region or 'global' when using `google-vertex/*` models (sets `GOOGLE_CLOUD_LOCATION`)."
+    required: false
+    default: "global"
+  gcp_credentials_json:
+    description: "Google Cloud Service Account JSON key for `google-vertex/*` models (omit when using Workload Identity Federation)."
+    required: false
+    default: ""
   model:
     description: "Pi model identifier (`provider/model`)."
     required: false
@@ -201,6 +214,9 @@ runs:
       env:
         PI_API_KEY: ${{ inputs.api_key }}
         PI_API_KEY_ENV: ${{ inputs.api_key_env }}
+        PI_GCP_PROJECT: ${{ inputs.gcp_project }}
+        PI_GCP_LOCATION: ${{ inputs.gcp_location }}
+        PI_GCP_CREDENTIALS_JSON: ${{ inputs.gcp_credentials_json }}
         PI_MODEL: ${{ inputs.model }}
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
@@ -242,8 +258,9 @@ runs:
         comments=$(curl -fsSL -H "$auth" "$api/$PR/comments?per_page=100")
         existing=$(printf '%s' "$comments" | jq -r 'first(.[] | select(.body | startswith("<!-- pi-review")) | .id) // empty')
         marker=$(printf '%s' "$comments" | jq -r 'first(.[] | select(.body | startswith("<!-- pi-review")) | (.body | split("\n")[0])) // "<!-- pi-review -->"')
-        body=$(printf '%s\n## Review by Pi\n\nThis run did not finish, so any verdict above is from an older commit. The log says why: %s/%s/actions/runs/%s' \
-          "$marker" "${{ github.server_url }}" "$REPO" "${{ github.run_id }}")
+        icon="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-icon.svg"
+        body=$(printf '%s\n## <img src="%s" width="24" height="24" align="absmiddle" alt="Huggy" /> Review by Huggy\n\nThis run did not finish, so any verdict above is from an older commit. The log says why: %s/%s/actions/runs/%s' \
+          "$marker" "$icon" "${{ github.server_url }}" "$REPO" "${{ github.run_id }}")
         payload=$(jq -n --arg b "$body" '{body: $b}')
         if [ -n "$existing" ]; then
           curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
@@ -337,6 +354,9 @@ runs:
       env:
         PI_API_KEY: ${{ inputs.api_key }}
         PI_API_KEY_ENV: ${{ inputs.api_key_env }}
+        PI_GCP_PROJECT: ${{ inputs.gcp_project }}
+        PI_GCP_LOCATION: ${{ inputs.gcp_location }}
+        PI_GCP_CREDENTIALS_JSON: ${{ inputs.gcp_credentials_json }}
         PI_MODEL: ${{ inputs.model }}
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
@@ -353,9 +373,6 @@ runs:
         CMD: ${{ steps.prepare.outputs.cmd }}
       run: |
         set -euo pipefail
-        [ -n "${PI_API_KEY:-}" ] || { echo "api_key input is empty" >&2; exit 1; }
-        export "$PI_API_KEY_ENV=$PI_API_KEY"
-
         # shellcheck disable=SC1091
         source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
 
@@ -439,7 +456,14 @@ runs:
         done
         [ "$run_ok" -eq 1 ] || { echo "All model attempts failed" >&2; exit 1; }
 
-        perl -pe 's/\Q$ENV{PI_API_KEY}\E/[redacted]/g' .pi-fix-reply.md > "$RUNNER_TEMP/reply.md"
+        python3 - <<'PY'
+        import os, sys
+        sys.path.insert(0, os.path.join(os.environ["RUNNER_TEMP"], "pi-action", "scripts"))
+        import run_review
+        raw = open(".pi-fix-reply.md", encoding="utf-8", errors="replace").read()
+        clean = run_review.redact_secret(raw, os.environ.get("PI_API_KEY") or "")
+        open(os.path.join(os.environ["RUNNER_TEMP"], "reply.md"), "w", encoding="utf-8").write(clean)
+        PY
         cp "$RUNNER_TEMP/reply.md" review.md
         rm -f .pi-fix-reply.md .pi-fix-request.md
         if [ "$CMD" = "fix" ] && [ -n "$(git status --porcelain)" ]; then
@@ -548,8 +572,8 @@ runs:
         fi
 
         git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
-          -c user.name=Pi -c user.email=pi@noreply.github.com \
-          commit -q -m "pi: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
+          -c user.name=Huggy -c user.email=huggy@noreply.github.com \
+          commit -q -m "huggy: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
         git push -q --no-verify "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
           "HEAD:refs/heads/$branch"
 
@@ -592,7 +616,7 @@ runs:
         PY
         fi
 
-    - name: Report when @pi command fails
+    - name: Report when command fails
       if: failure() && steps.prepare.outputs.go == 'true'
       shell: bash
       env:
@@ -612,8 +636,9 @@ runs:
           existing=$(printf '%s' "$comments" | jq -r 'first(.[] | select(.body | startswith("<!-- pi-review")) | .id) // empty')
           marker=$(printf '%s' "$comments" | jq -r 'first(.[] | select(.body | startswith("<!-- pi-review")) | (.body | split("\n")[0])) // "<!-- pi-review -->"')
           if [ -n "$existing" ]; then
-            payload=$(jq -n --arg m "$marker" --arg run "$RUN" \
-              '{body: ($m + "\n## Review by Pi\n\nThis `/review` run did not finish, so any verdict above is from an older commit. The log says why: " + $run)}')
+            icon="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-icon.svg"
+            payload=$(jq -n --arg m "$marker" --arg ic "$icon" --arg run "$RUN" \
+              '{body: ($m + "\n## <img src=\"" + $ic + "\" width=\"24\" height=\"24\" align=\"absmiddle\" alt=\"Huggy\" /> Review by Huggy\n\nThis `/review` run did not finish, so any verdict above is from an older commit. The log says why: " + $run)}')
             curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" \
               "$api/issues/comments/$existing" -d "$payload" > /dev/null || true
           fi
@@ -624,4 +649,4 @@ runs:
           post="$api/issues/$PR/comments"
         fi
         curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
-          "$post" -d "$(jq -n --arg b "Pi did not finish this one: a step failed, so nothing was pushed past the checks. The log says which: $RUN" '{body: $b}')" > /dev/null
+          "$post" -d "$(jq -n --arg b "Huggy did not finish this one: a step failed, so nothing was pushed past the checks. The log says which: $RUN" '{body: $b}')" > /dev/null
