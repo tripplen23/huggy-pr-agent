@@ -89,8 +89,8 @@ const c = check(3);
 
     def test_find_last_reviewed_sha_and_incremental_context(self):
         comments = [
-            {"body": "hello"},
-            {"body": "<!-- pi-review sha=a1b2c3d4e5f6 -->\n## Review by Pi"},
+            {"author": {"login": "mallory"}, "body": "<!-- pi-review sha=deadbeef1234 -->\nspoofed"},
+            {"author": {"login": "github-actions"}, "body": "<!-- pi-review sha=a1b2c3d4e5f6 -->\n## Review by Pi"},
         ]
         self.assertEqual(fetch_pr_context.find_last_reviewed_sha(comments), "a1b2c3d4e5f6")
         sample = {

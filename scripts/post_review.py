@@ -41,11 +41,12 @@ def extract_pr_description(text: str) -> tuple[str, str | None]:
 def merge_pr_description(existing_body: str, generated_desc: str) -> str:
     """Insert or update the managed `<!-- pi-description-start -->...<!-- pi-description-end -->` block
     without destroying author-written notes outside that block."""
-    block = f"{DESC_START}\n{generated_desc.strip()}\n{DESC_END}"
+    pattern = re.compile(re.escape(DESC_START) + r".*?" + re.escape(DESC_END), re.S)
+    cleaned_gen = re.sub(r"<!--\s*pi-description-(?:start|end)\s*-->", "", generated_desc or "").strip()
+    block = f"{DESC_START}\n{cleaned_gen}\n{DESC_END}"
     existing = (existing_body or "").strip()
     if not existing:
         return block
-    pattern = re.compile(re.escape(DESC_START) + r".*?" + re.escape(DESC_END), re.S)
     if pattern.search(existing):
         return pattern.sub(lambda _: block, existing, count=1)
     return f"{existing}\n\n---\n\n{block}"

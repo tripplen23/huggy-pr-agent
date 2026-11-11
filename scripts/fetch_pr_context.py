@@ -153,15 +153,19 @@ def annotate_diff(diff_text: str) -> tuple[list[tuple[str, int, int]], str]:
 
 def clean_body(text: str, limit: int = 1200) -> str:
     text = re.sub(r"^<!--\s*pi(?:-review(?:\s+sha=[0-9a-fA-F]+)?)?\s*-->\s*", "", (text or "").strip())
+    text = re.sub(r"<!--\s*pi-description-(?:start|end)\s*-->", "", text).strip()
     if len(text) > limit:
         return text[:limit].rstrip() + " …[truncated]"
     return text
 
 
 def find_last_reviewed_sha(issue_comments: list[dict]) -> str | None:
-    """Extract the most recent `sha=...` from the sticky `<!-- pi-review ... -->` comment."""
+    """Extract the most recent `sha=...` from the bot's sticky `<!-- pi-review ... -->` comment."""
     for ic in reversed(issue_comments):
         if not ic:
+            continue
+        author = (((ic.get("author") or {}).get("login")) or "").lower()
+        if author and author not in ("github-actions", "github-actions[bot]"):
             continue
         m = REVIEW_SHA_RE.match((ic.get("body") or "").strip())
         if m and m.group(1):
@@ -364,18 +368,25 @@ def format_pr_context(
 
 
 def compute_incremental_diff(last_sha: str) -> str:
-    """Return `git diff <last_sha> HEAD` if last_sha is a reachable commit distinct from HEAD."""
+    """Return `git diff <last_sha> <PR head>` if last_sha is a reachable commit distinct from the PR head."""
     try:
-        head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        parents = subprocess.check_output(
+            ["git", "rev-list", "--parents", "-n", "1", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).split()
+        if len(parents) >= 3:
+            head_sha = parents[-1]
+        else:
+            head_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+            ).strip()
         if head_sha.startswith(last_sha) or last_sha.startswith(head_sha[:7]):
             return ""
-        # Fetch the commit if shallow clone doesn't have it yet
         if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
             subprocess.call(["git", "fetch", "-q", "--no-tags", "--depth=20", "origin", last_sha], stderr=subprocess.DEVNULL)
         if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
             return ""
         return subprocess.check_output(
-            ["git", "-c", "core.quotePath=false", "diff", last_sha, "HEAD"],
+            ["git", "-c", "core.quotePath=false", "diff", last_sha, head_sha],
             text=True,
             stderr=subprocess.DEVNULL,
         )
