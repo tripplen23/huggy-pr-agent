@@ -192,16 +192,16 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
 </div>
 
 1. **Deterministic Context Preparation (`scripts/fetch_pr_context.py`)**
-   - Reads `AGENTS.md` (or `CLAUDE.md`) from the **base** branch (`git show base:AGENTS.md`) so an untrusted PR cannot rewrite its own review checklist.
-   - Filters out lockfiles and generated noise (`pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `*.min.js`, `*.snap`), builds an explicit `<review_files>` checklist, and prefixes every new-side diff line with its exact line number (`L264 + if (existingUser) {`) so the model never miscounts lines from `@@` headers.
-   - Fetches PR title, linked GitHub issues (`closingIssuesReferences`), description, full commit messages, CI check status (`statusCheckRollup`), and open/resolved review threads into `<pr_context>`.
-2. **Smart Parallel Bundling & Shell-Free Agent Pass (`scripts/run_review.py`)**
-   - Small/medium PRs run in a single fast pass; massive PRs (10k+ lines / dozens of files) are deterministically grouped into semantic counterpart bundles (`foo.ts` + `contracts/foo.ts` + `foo.test.ts`) and reviewed concurrently with adaptive timeouts (`review_timeout_minutes: auto`) and graceful partial-coverage recovery.
-   - Runs Pi with shell-free read-only tools (`--tools read,grep,find,ls --thinking high`) to verify callers, contracts, and tests across the full repository.
-3. **Independent Judge Pass & Deterministic Guards (`prompts/judge.md`, `scripts/post_review.py`)**
-   - A fast, tool-free **Fact-Checker / Judge pass** verifies every candidate finding against the exact ground-truth file lines, dropping hallucinations and duplicates before anything reaches GitHub.
-   - Deterministically validates `start_line..line` against diff hunks, snaps minor 1–5 line drift, and disarms no-op, placeholder (`// ...`), or unbalanced ` ```suggestion ` blocks so clicking **Commit suggestion** can never corrupt surrounding code.
-   - Auto-resolves prior review threads once fixed, syncs stale PR descriptions (`<pr_description>`), and replaces the live reviewing animation with the static `<img src="assets/huggy-icon.svg" width="16" align="absmiddle" /> Review by Huggy` summary.
+   - Reads root and path-scoped `AGENTS.md` / `CLAUDE.md` / `REVIEW.md` / `.github/instructions/*.instructions.md` (`applyTo` globs) strictly from the **base** branch (`git show base:...`) so an untrusted PR cannot rewrite its own review checklist.
+   - Honors `.gitattributes` `linguist-generated` / `linguist-vendored` rules alongside lockfile/codegen filters (`pnpm-lock.yaml`, `Cargo.lock`, `*.pb.go`, `*.gen.*`, `*.min.js`, `*.snap`), builds an explicit `<review_files>` checklist, and prefixes every new-side diff line with `L<num>`.
+   - Fetches PR title, linked GitHub issues (`closingIssuesReferences`), description, commit messages, CI check status + failed GitHub Actions error excerpts (`statusCheckRollup`), and open/resolved review threads into `<pr_context>`.
+2. **Smart Parallel Bundling & Review-Shaped Agent Pass (`scripts/run_review.py`)**
+   - Small/medium PRs run in a single fast pass; massive PRs (10k+ lines / dozens of files) are deterministically grouped into semantic counterpart bundles (`foo.ts` + `contracts/foo.ts` + `foo.test.ts`) and reviewed concurrently (`review_timeout_minutes: auto`), with an optional `review_depth: deep` (`/review deep`) dual-lens pass (Logic/Callers + Security/Spec).
+   - Uses review-shaped tool discipline (`--tools read,grep,find,ls --thinking high`): forms hypotheses from the diff first, batches `grep`/`find` caller discovery, then reads narrow `offset`/`limit` ranges.
+3. **Confidence-Scored (`≥ 80`) Judge Pass & Two-Channel Output (`prompts/judge.md`, `scripts/post_review.py`)**
+   - An independent tool-free **Judge pass** scores every candidate `0–100` against ground-truth file lines and the `AGENTS.md` rubric, enforcing hard exclusions (no pre-existing code, no ungrounded speculation, no hallucinated rules) so only `confidence ≥ 80` defects reach inline diff threads.
+   - Under `review_profile: chill` (default), `High` and `Medium` defects are posted inline while `Low` nitpicks are collapsed inside `<details><summary>🧹 Nitpicks</summary>` in the sticky summary.
+   - Content-anchored sliding-window relocation repairs minor `1–5` line drift on `suggestion` blocks, disarms unsafe/unbalanced blocks, auto-resolves fixed threads, and replaces the live reviewing sprite with the static `Review by Huggy` summary.
 
 ---
 
@@ -211,7 +211,7 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 
 | Trigger / Command | Mode | What it does |
 | :--- | :--- | :--- |
-| **PR open / sync** *(or `/review`, `@huggy /review`)* | Read-only | Reviews `base...HEAD` against `AGENTS.md` / `CLAUDE.md`, posts inline diff comments (`start_line..line`) with colored `High` / `Medium` / `Low` badges and 1-click `suggestion` blocks, auto-resolves fixed threads, syncs stale PR descriptions, and updates the sticky summary. |
+| **PR open / sync** *(or `/review`, `/review deep`)* | Read-only | Reviews `base...HEAD` against `AGENTS.md` / `CLAUDE.md` & path-scoped rules, posts verified `High` / `Medium` inline diff comments (`confidence ≥ 80`) with 1-click `suggestion` blocks, collapses `Low` nitpicks in the summary (`chill`), and auto-resolves fixed threads. (`/review deep` runs parallel Logic + Security specialist passes.) |
 | **`/describe`** *(or `@huggy /describe`)* | Read-only | Generates a structured PR summary (`Type`, overview, and file-by-file walkthrough table) and updates the PR description. |
 | **`/improve`** *(or `@huggy /improve`)* | Read-only | Scans the PR diff for self-contained code improvements and posts inline committable ` ```suggestion ` blocks. |
 | **`/ask <question>`** *(or `@huggy /ask ...`)* | Read-only | Answers questions about the PR or surrounding codebase directly in the conversation or diff review thread, citing exact `path:line` references. |
@@ -236,7 +236,9 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `review_timeout_minutes` | `auto` | Review timeout budget in minutes, or `auto` to scale dynamically with PR size (24m on small PRs up to 50m on massive multi-bundle PRs). |
 | `fix_timeout_minutes` | `25` | Per-attempt timeout in minutes for interactive `@huggy` / `@pi` / `/fix` commands (and `/describe`, `/improve`, `/ask`). |
 | `max_parallel_bundles` | `3` | Max concurrent Pi workers when reviewing large multi-bundle PRs (> 10 files or > 1,800 changed lines). |
-| `judge_pass` | `true` | Run an independent tool-free fact-checker pass to drop hallucinated or duplicate findings. |
+| `judge_pass` | `true` | Run an independent tool-free `0–100` confidence Judge pass (`≥ 80` inline cutoff) to drop false positives and duplicates. |
+| `review_profile` | `chill` | `chill` posts `High`/`Medium` inline and collapses `Low` nitpicks inside the sticky summary; `assertive` posts all severities inline. |
+| `review_depth` | `standard` | `standard` runs one unified pass per bundle; `deep` runs parallel Logic/Callers + Security/Spec passes merged via the Judge. |
 | `skip_bots` | `true` | Skip automatic `pull_request` reviews when the PR author is a bot (e.g. Renovate, Dependabot). |
 | `skip_drafts` | `false` | Skip automatic `pull_request` reviews while the PR is in draft state. |
 | `rubric_file` | `AGENTS.md` | File read from the **base** branch as the system-prompt rubric (falls back to `CLAUDE.md` if absent). |

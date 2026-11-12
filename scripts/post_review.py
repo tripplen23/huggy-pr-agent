@@ -151,6 +151,74 @@ def validate_suggestion_against_file(
     return SUGGESTION_BLOCK_RE.sub(check_block, markdown)
 
 
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+COMMON_KEYWORDS = {"const", "let", "var", "return", "function", "async", "await", "import", "from", "def", "class", "true", "false", "null", "none", "self", "this"}
+
+
+def ident_tokens(text: str) -> set[str]:
+    return {tok for tok in IDENT_RE.findall(text) if tok.lower() not in COMMON_KEYWORDS}
+
+
+def leading_indent(line: str) -> str:
+    return line[: len(line) - len(line.lstrip(" \t"))]
+
+
+def relocate_suggestion_window(
+    markdown: str,
+    file_lines: list[str],
+    path: str,
+    start: int,
+    end: int,
+    hunk_of: dict[tuple[str, int], int],
+    max_shift: int = 5,
+) -> tuple[int, int] | None:
+    """Content-anchored sliding-window line repair (`±max_shift`) for drifted suggestion ranges."""
+    m = SUGGESTION_BLOCK_RE.search(markdown)
+    if not m or not file_lines:
+        return None
+    sugg_body = m.group(2)
+    sugg_nonempty = [ln for ln in sugg_body.splitlines() if ln.strip()]
+    if not sugg_nonempty:
+        return None
+    sugg_indent = leading_indent(sugg_nonempty[0])
+    sugg_idents = ident_tokens(sugg_body)
+    if not sugg_idents:
+        return None
+
+    # Only relocate when the original range is off-hunk, cross-hunk, or shares zero identifiers with the suggestion
+    orig_h_end = hunk_of.get((path, end))
+    orig_in_single_hunk = orig_h_end is not None and (start == end or hunk_of.get((path, start)) == orig_h_end)
+    if orig_in_single_hunk and 1 <= start <= end <= len(file_lines):
+        orig_idents = ident_tokens("\n".join(file_lines[start - 1 : end]))
+        if orig_idents & sugg_idents:
+            return None
+
+    for dist in range(1, max_shift + 1):
+        matches: list[tuple[int, int]] = []
+        for delta in (-dist, dist):
+            s2, e2 = start + delta, end + delta
+            if s2 < 1 or e2 > len(file_lines) or s2 > e2:
+                continue
+            h_end = hunk_of.get((path, e2))
+            if h_end is None or (s2 < e2 and hunk_of.get((path, s2)) != h_end):
+                continue
+            cand_slice = file_lines[s2 - 1 : e2]
+            cand_nonempty = [ln for ln in cand_slice if ln.strip()]
+            if not cand_nonempty or leading_indent(cand_nonempty[0]) != sugg_indent:
+                continue
+            cand_idents = ident_tokens("\n".join(cand_slice))
+            if not (cand_idents & sugg_idents):
+                continue
+            if validate_suggestion_against_file(markdown, file_lines, s2, e2) != markdown:
+                continue
+            matches.append((s2, e2))
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return None
+    return None
+
+
 def nearest_hunk_line(
     path: str,
     target_line: int,
@@ -225,7 +293,12 @@ def parse_review_markdown(
     for f in findings:
         body_text = "\n".join(f["body_lines"]).strip()
         rest = f["rest"]
-        loc = f"`{f['path']}:{f['start']}" + (f"-{f['end']}`" if f["end"] != f["start"] else "`")
+        parts_sev = [p.strip() for p in re.split(r"\s*·\s*", rest, maxsplit=1) if p.strip()]
+        f["severity"] = (
+            parts_sev[0].lower()
+            if (parts_sev and parts_sev[0].capitalize() in BADGES)
+            else "medium"
+        )
         snippet = ""
         if not is_safe_rel_path(worktree_root, f["path"]):
             body_text = disarm_suggestion(body_text)
@@ -233,11 +306,17 @@ def parse_review_markdown(
             full_path = safe_worktree_file(worktree_root, f["path"])
             if full_path:
                 file_lines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
+                snapped_window = relocate_suggestion_window(
+                    body_text, file_lines, f["path"], f["start"], f["end"], hunk_of
+                )
+                if snapped_window is not None:
+                    f["start"], f["end"] = snapped_window
                 cited = file_lines[max(0, f["start"] - 1) : min(len(file_lines), f["end"])]
                 if cited:
                     snippet = "\n```\n" + "\n".join(cited[:6]) + "\n```"
                 body_text = validate_suggestion_against_file(body_text, file_lines, f["start"], f["end"])
 
+        loc = f"`{f['path']}:{f['start']}" + (f"-{f['end']}`" if f["end"] != f["start"] else "`")
         summary_body = disarm_suggestion(body_text)
         end_hunk = hunk_of.get((f["path"], f["end"]))
         relocated = False
@@ -271,12 +350,33 @@ def parse_review_markdown(
     return verdict_line, intro_lines, findings
 
 
+def partition_findings_by_profile(findings: list[dict], profile: str = "chill") -> tuple[list[dict], list[str]]:
+    """Split findings into `(inline_candidates, collapsed_nitpick_summaries)`.
+
+    Under `chill` (default), `Low` / nitpick items stay out of inline PR review threads
+    and are rendered inside a collapsible `<details>` section in the sticky summary.
+    Under `assertive`, all severities are eligible for inline diff comments.
+    """
+    norm = (profile or "chill").strip().lower()
+    if norm == "assertive":
+        return list(findings), []
+    inline_cands: list[dict] = []
+    nitpicks: list[str] = []
+    for f in findings:
+        if f.get("severity") == "low":
+            nitpicks.append(f["summary"])
+        else:
+            inline_cands.append(f)
+    return inline_cands, nitpicks
+
+
 def main() -> int:
     repo = os.environ["REPO"]
     owner, name = repo.split("/", 1)
     pr = int(os.environ["PR"])
     token = os.environ["GH_TOKEN"]
     temp = os.environ["RUNNER_TEMP"]
+    review_profile = (os.environ.get("PI_REVIEW_PROFILE") or "chill").strip().lower()
 
     def api(method: str, url: str, payload=None):
         data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -315,6 +415,8 @@ def main() -> int:
         except Exception as exc:
             sys.stderr.write(f"warning: could not update PR description ({exc})\n")
 
+    inline_candidates, nitpick_summaries = partition_findings_by_profile(findings, review_profile)
+
     gql_query = """
     query($owner: String!, $name: String!, $pr: Int!) {
       repository(owner: $owner, name: $name) {
@@ -338,7 +440,7 @@ def main() -> int:
     """
     open_threads: dict[tuple[str, int, int], list[tuple[int | None, str]]] = {}
     stale_thread_ids: list[str] = []
-    new_targets = {(f["path"], f["eff_start"], f["end"]) for f in findings if f["end_hunk"] is not None}
+    new_targets = {(f["path"], f["eff_start"], f["end"]) for f in inline_candidates if f["end_hunk"] is not None}
     try:
         gql = (
             api(
@@ -390,7 +492,7 @@ def main() -> int:
     inline = []
     fallback = []
     skipped_existing = 0
-    for f in findings:
+    for f in inline_candidates:
         p, s_l, e_l = f["path"], f["start"], f["end"]
         end_hunk = f["end_hunk"]
         same_hunk = f["same_hunk"]
@@ -454,6 +556,8 @@ def main() -> int:
         notes = []
         if posted_inline:
             notes.append(f"{posted_inline} finding(s) commented on the diff.")
+        if nitpick_summaries:
+            notes.append(f"{len(nitpick_summaries)} minor nitpick(s) collapsed below.")
         if skipped_existing:
             notes.append(f"{skipped_existing} open finding(s) on the diff from an earlier push.")
         if resolved_count:
@@ -462,6 +566,16 @@ def main() -> int:
             notes.append("Updated the PR description to match the current diff.")
         if notes:
             body_parts += ["", " ".join(notes)]
+    if nitpick_summaries:
+        body_parts += [
+            "",
+            "<details>",
+            f"<summary>🧹 <b>Nitpicks ({len(nitpick_summaries)})</b></summary>",
+            "",
+            "\n\n".join(nitpick_summaries),
+            "",
+            "</details>",
+        ]
     if fallback:
         body_parts += ["", "### Findings outside the diff hunks", "", "\n\n".join(fallback)]
 

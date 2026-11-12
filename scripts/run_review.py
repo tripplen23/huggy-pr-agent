@@ -428,27 +428,55 @@ def extract_json_object(text: str) -> dict | None:
         return None
 
 
+DEEP_LOGIC_LENS = (
+    "\n\n### Specialist Lens: Functional Correctness, Callers & State Integrity\n"
+    "Focus this pass strictly on broken callers/contracts across the repo, concrete boundary/null/empty inputs, "
+    "concurrency/race conditions, partial state writes, resource leaks, and missing test updates."
+)
+DEEP_SECURITY_LENS = (
+    "\n\n### Specialist Lens: Security, Trust Boundaries & Repository Rules\n"
+    "Focus this pass strictly on missing auth/tenant/permission checks, injection/path-traversal/SSRF, "
+    "secret/PII leaks, schema-vs-guard drift, swallowed errors, and explicit `AGENTS.md`/`CLAUDE.md` rules."
+)
+
+
+def demote_rest_to_low(rest: str) -> str:
+    parts = [p.strip() for p in re.split(r"\s*·\s*", rest or "", maxsplit=1) if p.strip()]
+    if len(parts) == 2 and parts[0].lower() in ("high", "medium", "low"):
+        return f"Low · {parts[1]}"
+    return f"Low · {rest}" if rest else "Low · Minor issue"
+
+
 def apply_judge_decisions(candidates: list[dict], decisions_obj: dict | None) -> list[dict]:
-    """Filter and disarm candidates according to Judge JSON output (fail-open on missing entries)."""
+    """Filter, confidence-gate (`>=80` inline, `65..79` demoted to Low), and disarm candidates."""
     if not decisions_obj or not isinstance(decisions_obj.get("decisions"), list):
         return candidates
 
-    action_by_idx: dict[int, str] = {}
+    decision_by_idx: dict[int, tuple[str, int]] = {}
     for item in decisions_obj["decisions"]:
         if not isinstance(item, dict):
             continue
         idx = item.get("index")
         act = (item.get("action") or "keep").strip().lower()
+        raw_conf = item.get("confidence")
+        conf = int(raw_conf) if isinstance(raw_conf, (int, float)) else 85
         if isinstance(idx, int) and act in ("keep", "drop", "disarm_suggestion"):
-            action_by_idx[idx] = act
+            decision_by_idx[idx] = (act, conf)
 
     kept: list[dict] = []
     for i, c in enumerate(candidates):
-        act = action_by_idx.get(i, "keep")
-        if act == "drop":
-            sys.stdout.write(f"[judge] Dropped candidate [{i}] {c['path']}:{c['start']}-{c['end']}\n")
+        act, conf = decision_by_idx.get(i, ("keep", 85))
+        sev = (c.get("severity") or "medium").lower()
+        if act == "drop" or conf < 65 or (sev == "low" and conf < 72):
+            sys.stdout.write(f"[judge] Dropped candidate [{i}] {c['path']}:{c['start']}-{c['end']} (conf={conf})\n")
             continue
         updated = dict(c)
+        if conf < 80 and sev in ("high", "medium"):
+            updated["severity"] = "low"
+            updated["rest"] = demote_rest_to_low(updated.get("rest") or "")
+            sys.stdout.write(
+                f"[judge] Demoted candidate [{i}] {c['path']}:{c['start']}-{c['end']} to Low (conf={conf})\n"
+            )
         if act == "disarm_suggestion":
             updated["body_text"] = post_review.disarm_suggestion(updated["body_text"])
         kept.append(updated)
@@ -476,9 +504,12 @@ def build_judge_input(
     candidates: list[dict],
     judge_prompt: str,
     gql_data: dict | None = None,
+    scoped_rules_md: str = "",
     worktree_root: str = ".",
 ) -> str:
     blocks = [judge_prompt.strip()]
+    if scoped_rules_md.strip():
+        blocks.extend(["", "## Path-Scoped Repository Rules (from `base` branch)", "", scoped_rules_md.strip()])
     resolved_summary = extract_resolved_threads_summary(gql_data or {})
     if resolved_summary:
         blocks.extend(["", "## Previously Resolved Threads on This PR", "", *resolved_summary])
@@ -617,11 +648,13 @@ def main() -> int:
     timeout_input = os.environ.get("PI_REVIEW_TIMEOUT_MINUTES") or "auto"
     max_parallel = max(1, int(os.environ.get("PI_MAX_PARALLEL_BUNDLES") or "3"))
     judge_enabled = (os.environ.get("PI_JUDGE_PASS") or "true").strip().lower() == "true"
+    review_depth = (os.environ.get("PI_REVIEW_DEPTH") or "standard").strip().lower()
     comment_id_raw = os.environ.get("COMMENT_ID") or ""
     comment_id = int(comment_id_raw) if comment_id_raw.isdigit() else None
 
     brief_template_path = os.path.join(temp, "brief-template.md")
     rubric_path = os.path.join(temp, "rubric.md")
+    scoped_rules_path = os.path.join(temp, "scoped-rules.md")
     diff_path = os.path.join(temp, "diff.patch")
     meta_path = os.path.join(temp, "pr-meta.json")
     judge_prompt_path = os.path.join(temp, "pi-action", "prompts", "judge.md")
@@ -629,11 +662,14 @@ def main() -> int:
     brief_template = open(brief_template_path, encoding="utf-8").read()
     diff_text = open(diff_path, encoding="utf-8", errors="replace").read() if os.path.isfile(diff_path) else ""
     meta = json.loads(open(meta_path, encoding="utf-8").read()) if os.path.isfile(meta_path) else {}
+    scoped_rules_md = open(scoped_rules_path, encoding="utf-8").read() if os.path.isfile(scoped_rules_path) else ""
+    gitattributes_globs = meta.get("gitattributes_globs") or []
+    failed_ci_logs = meta.get("failed_ci_logs") or ""
 
-    parsed_files = fetch_pr_context.parse_annotated_files(diff_text)
+    parsed_files = fetch_pr_context.parse_annotated_files(diff_text, gitattributes_globs)
     if not parsed_files:
         empty_md = (
-            "## Review by Pi\n\n"
+            "## Review by Huggy\n\n"
             "**Verdict:** looks good\n"
             "**Effort:** 1 · **Security:** No issues\n\n"
             "No reviewable source files changed in this diff (only lockfiles, generated files, or deletions).\n"
@@ -643,22 +679,29 @@ def main() -> int:
         return 0
 
     bundles = bundle_review_files(parsed_files)
+    lenses: list[tuple[str, str]] = (
+        [("logic", DEEP_LOGIC_LENS), ("security", DEEP_SECURITY_LENS)]
+        if review_depth == "deep"
+        else [("standard", "")]
+    )
+    total_passes = len(bundles) * len(lenses)
     total_lines = sum(f["changed_lines"] for f in parsed_files)
     total_budget_sec, per_bundle_sec = compute_timeout_budget(
-        timeout_input, len(bundles), total_lines, max_parallel
+        timeout_input, total_passes, total_lines, max_parallel
     )
     deadline = time.monotonic() + total_budget_sec
     print(
         f"Review plan: {len(parsed_files)} files ({total_lines} changed lines) -> "
-        f"{len(bundles)} bundle(s), parallel={min(max_parallel, len(bundles))}, "
-        f"budget={total_budget_sec // 60}m (per-bundle={per_bundle_sec // 60}m)."
+        f"{len(bundles)} bundle(s) x {len(lenses)} lens(es) ({review_depth}), "
+        f"parallel={min(max_parallel, total_passes)}, budget={total_budget_sec // 60}m."
     )
 
-    def run_bundle(idx: int, b_files: list[dict]) -> tuple[int, str | None]:
+    def run_pass(idx: int, b_files: list[dict], lens_name: str, lens_suffix: str) -> tuple[int, str, str | None]:
         b_paths = {f["path"] for f in b_files}
         siblings = [f for f in parsed_files if f["path"] not in b_paths]
-        b_diff_path = os.path.join(temp, f"diff-numbered-b{idx}.patch")
+        b_diff_path = os.path.join(temp, f"diff-numbered-b{idx}-{lens_name}.patch")
         label = f"Bundle {idx + 1}/{len(bundles)}" if len(bundles) > 1 else ""
+        b_scoped_rules = fetch_pr_context.collect_scoped_rules(list(b_paths)) if len(bundles) > 1 else scoped_rules_md
         ctx_md = fetch_pr_context.format_pr_context(
             meta.get("graphql") or {},
             comment_id=comment_id,
@@ -669,8 +712,14 @@ def main() -> int:
             bundle_files=b_files,
             sibling_files=siblings if len(bundles) > 1 else None,
             bundle_label=label,
+            extra_generated_globs=gitattributes_globs,
+            scoped_rules_md=b_scoped_rules,
+            failed_ci_logs=failed_ci_logs,
         )
-        t_template = strip_pr_description_section(brief_template) if len(bundles) > 1 else brief_template
+        include_desc = len(bundles) == 1 and lens_name in ("standard", "logic")
+        t_template = brief_template if include_desc else strip_pr_description_section(brief_template)
+        if lens_suffix:
+            t_template = t_template + lens_suffix
         full_prompt = f"{t_template}\n\n{ctx_md}" if ctx_md else t_template
         out = invoke_pi(
             prompt_text=full_prompt,
@@ -680,26 +729,29 @@ def main() -> int:
             rubric_path=rubric_path,
             attempt_timeout_sec=per_bundle_sec,
             deadline_monotonic=deadline,
-            label=f"bundle-{idx + 1}/{len(bundles)}",
+            label=f"bundle-{idx + 1}/{len(bundles)}-{lens_name}",
             require_verdict=True,
         )
-        return idx, out
+        return idx, lens_name, out
 
-    results_by_idx: dict[int, str | None] = {}
-    workers = min(max_parallel, len(bundles))
+    pass_tasks = [(i, b, l_name, l_sfx) for i, b in enumerate(bundles) for l_name, l_sfx in lenses]
+    outputs_by_bundle: dict[int, list[str]] = {i: [] for i in range(len(bundles))}
+    workers = min(max_parallel, len(pass_tasks))
     if workers <= 1:
-        for i, b in enumerate(bundles):
-            _, out = run_bundle(i, b)
-            results_by_idx[i] = out
+        for i, b, l_name, l_sfx in pass_tasks:
+            _, _, out = run_pass(i, b, l_name, l_sfx)
+            if out:
+                outputs_by_bundle[i].append(out)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(run_bundle, i, b) for i, b in enumerate(bundles)]
+            futs = [pool.submit(run_pass, i, b, l_name, l_sfx) for i, b, l_name, l_sfx in pass_tasks]
             for fut in concurrent.futures.as_completed(futs):
-                i, out = fut.result()
-                results_by_idx[i] = out
+                i, _, out = fut.result()
+                if out:
+                    outputs_by_bundle[i].append(out)
 
-    succeeded = [i for i in range(len(bundles)) if results_by_idx.get(i)]
-    failed = [i for i in range(len(bundles)) if not results_by_idx.get(i)]
+    succeeded = [i for i in range(len(bundles)) if outputs_by_bundle[i]]
+    failed = [i for i in range(len(bundles)) if not outputs_by_bundle[i]]
     if not succeeded:
         sys.stderr.write("All review bundles failed.\n")
         return 1
@@ -711,14 +763,15 @@ def main() -> int:
     notes: list[str] = []
 
     for i in succeeded:
-        parsed = parse_raw_candidates(results_by_idx[i] or "")
-        all_candidates.extend(parsed["candidates"])
-        max_effort = max(max_effort, parsed["effort"])
-        any_sec = any_sec or parsed["security_attention"]
-        if i == 0 and parsed["pr_description"]:
-            pr_desc = parsed["pr_description"]
-        if len(bundles) == 1 and parsed["intro_lines"] and not parsed["candidates"]:
-            notes.extend(parsed["intro_lines"])
+        for pass_idx, raw_out in enumerate(outputs_by_bundle[i]):
+            parsed = parse_raw_candidates(raw_out)
+            all_candidates.extend(parsed["candidates"])
+            max_effort = max(max_effort, parsed["effort"])
+            any_sec = any_sec or parsed["security_attention"]
+            if i == 0 and pr_desc is None and parsed["pr_description"]:
+                pr_desc = parsed["pr_description"]
+            if len(bundles) == 1 and pass_idx == 0 and parsed["intro_lines"] and not parsed["candidates"]:
+                notes.extend(parsed["intro_lines"])
 
     if failed:
         missed_paths = list(dict.fromkeys(f["path"] for i in failed for f in bundles[i]))[:8]
@@ -730,7 +783,12 @@ def main() -> int:
 
     if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path) and (deadline - time.monotonic()) > 45:
         judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
-        judge_input = build_judge_input(all_candidates, judge_prompt, gql_data=meta.get("graphql"))
+        judge_input = build_judge_input(
+            all_candidates,
+            judge_prompt,
+            gql_data=meta.get("graphql"),
+            scoped_rules_md=scoped_rules_md,
+        )
         judge_models = [m for m in (primary_model, fallback_model) if m]
         judge_raw = invoke_pi(
             prompt_text=judge_input,
