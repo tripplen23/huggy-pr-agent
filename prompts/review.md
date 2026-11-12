@@ -14,9 +14,10 @@ How to investigate (Review-Shaped Tool Loop):
    every caller, contract, and test counterpart across the working tree. If a `grep`
    pattern fails or matches too broadly, retry at most **one** simpler literal search; if
    a path is uncertain, use `find` rather than guessing paths.
-3. **Batch narrow `read` calls (`offset` + `limit`):** read only the specific ranges you
-   need around callers or ambiguous hunks instead of dumping entire large files into
-   working context (at most 6–8 tool turns total).
+3. **Batch narrow `read` calls (`offset` + `limit`):** issue multiple `read` calls in
+   parallel within a single turn (passing `offset` + `limit`) instead of reading files one
+   turn at a time. Keep your entire investigation within **3–4 tool turns total** so you
+   never time out on large multi-endpoint diffs.
 4. **Dig into every suspicious cross-file interaction:** investigate callers, error paths,
    auth boundaries, and partial-failure states thoroughly. Cite exact `path:line` callers
    or quote the exact `AGENTS.md` / `CLAUDE.md` rule when flagging a violation.

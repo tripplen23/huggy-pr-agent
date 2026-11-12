@@ -739,6 +739,44 @@ const count = 1;
         self.assertEqual(cmd_d, "review")
         self.assertEqual(sum_d, "deep")
 
+        # 8. Timeout step-down in `invoke_pi` (`high`+tools -> `low`+tools -> `low`+`--no-tools`)
+        seen_cmds: list[list[str]] = []
+
+        class FakeProc:
+            returncode = 0
+            stdout = "## Review by Huggy\n\n**Verdict:** looks good\n"
+            stderr = ""
+
+        def fake_runner(cmd, **kwargs):
+            seen_cmds.append(cmd)
+            if len(seen_cmds) <= 2:
+                raise run_review.subprocess.TimeoutExpired(cmd=cmd, timeout=10)
+            return FakeProc()
+
+        res_out = run_review.invoke_pi(
+            prompt_text="prompt",
+            model_candidates=["m1", "m1", "m2"],
+            thinking="high",
+            tools_arg="read,grep,find,ls",
+            rubric_path=None,
+            attempt_timeout_sec=120,
+            deadline_monotonic=run_review.time.monotonic() + 600,
+            require_verdict=True,
+            runner=fake_runner,
+            sleeper=lambda _: None,
+        )
+        self.assertIsNotNone(res_out)
+        self.assertEqual(len(seen_cmds), 3)
+        # Attempt 1: high + tools
+        self.assertIn("high", seen_cmds[0])
+        self.assertIn("--tools", seen_cmds[0])
+        # Attempt 2 (after timeout): stepped down to low + tools
+        self.assertIn("low", seen_cmds[1])
+        self.assertIn("--tools", seen_cmds[1])
+        # Attempt 3 (final fallback after 2 timeouts): low + --no-tools (diff-only guaranteed completion)
+        self.assertIn("low", seen_cmds[2])
+        self.assertIn("--no-tools", seen_cmds[2])
+
 
 if __name__ == "__main__":
     unittest.main()
