@@ -1,0 +1,8 @@
+# .github/dependabot.yml — 1-click update PRs whenever huggy-pr-agent ships a new release
+# (Use when pinning `uses: tripplen23/huggy-pr-agent@v1.8.0` instead of the auto-updating `@v1` tag.)
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
