@@ -170,8 +170,8 @@ def split_oversized_file(file_entry: dict, max_lines: int = 1800) -> list[dict]:
 
 def bundle_review_files(
     files: list[dict],
-    max_files: int = 10,
-    max_lines: int = 1800,
+    max_files: int = 8,
+    max_lines: int = 1100,
 ) -> list[list[dict]]:
     """Deterministically pack reviewable files (and split oversized single files) into semantic bundles."""
     if not files:
@@ -265,9 +265,12 @@ def invoke_pi(
     deadline_monotonic: float,
     label: str = "review",
     require_verdict: bool = False,
+    runner=subprocess.run,
+    sleeper=time.sleep,
 ) -> str | None:
-    """Run `pi --print` with prompt piped via stdin (immune to Linux MAX_ARG_STRLEN)."""
+    """Run `pi --print` with prompt piped via stdin and step down thinking/tools after timeouts."""
     active_candidates = [c for c in model_candidates if c]
+    saw_timeout = False
     for idx, candidate in enumerate(active_candidates):
         remaining = deadline_monotonic - time.monotonic()
         if remaining < 25:
@@ -275,11 +278,30 @@ def invoke_pi(
             break
         has_distinct_fallback = any(c != candidate for c in active_candidates[idx + 1 :])
         reserve_for_fallback = (
-            min(210, attempt_timeout_sec + 20)
-            if (has_distinct_fallback and remaining > 260)
-            else 0
+            min(300, attempt_timeout_sec + 20)
+            if (has_distinct_fallback and remaining > 380)
+            else (120 if (has_distinct_fallback and remaining > 200) else 0)
         )
         this_timeout = min(attempt_timeout_sec, max(25, int(remaining - reserve_for_fallback)))
+
+        eff_thinking = thinking
+        eff_tools = tools_arg
+        eff_prompt = prompt_text
+        is_last_attempt = idx + 1 == len(active_candidates)
+        if saw_timeout:
+            # Previous attempt hit wall-clock timeout: step down thinking (and drop tools on final fallback)
+            eff_thinking = "low" if thinking not in ("off", "minimal") else thinking
+            if is_last_attempt and tools_arg != "none":
+                eff_tools = "none"
+                eff_prompt = (
+                    prompt_text
+                    + "\n\n[Time-budget fallback: tools are disabled for this pass; review directly from `<pr_context>` and the `L<num>` diff above.]"
+                )
+            elif tools_arg != "none":
+                eff_prompt = (
+                    prompt_text
+                    + "\n\n[Time-budget retry: batch any essential `grep`/`read` lookups into at most 2 fast turns, then emit your final review immediately.]"
+                )
 
         cmd = [
             "pi",
@@ -287,12 +309,12 @@ def invoke_pi(
             "--model",
             candidate,
             "--thinking",
-            thinking,
+            eff_thinking,
         ]
-        if tools_arg == "none":
+        if eff_tools == "none":
             cmd.append("--no-tools")
         else:
-            cmd.extend(["--tools", tools_arg])
+            cmd.extend(["--tools", eff_tools])
         cmd.extend(
             [
                 "--no-extensions",
@@ -306,12 +328,14 @@ def invoke_pi(
         if rubric_path and os.path.isfile(rubric_path) and os.path.getsize(rubric_path) > 0:
             cmd.extend(["--append-system-prompt", rubric_path])
 
-        sys.stdout.write(f"[{label}] Running model={candidate} thinking={thinking} timeout={this_timeout}s\n")
+        sys.stdout.write(
+            f"[{label}] Running model={candidate} thinking={eff_thinking} tools={eff_tools} timeout={this_timeout}s\n"
+        )
         sys.stdout.flush()
         try:
-            proc = subprocess.run(
+            proc = runner(
                 cmd,
-                input=prompt_text,
+                input=eff_prompt,
                 text=True,
                 capture_output=True,
                 timeout=this_timeout,
@@ -326,13 +350,14 @@ def invoke_pi(
                 err_preview = (proc.stderr or "").strip()[-400:]
                 sys.stderr.write(f"[{label}] Attempt on {candidate} exited {proc.returncode}: {err_preview}\n")
         except subprocess.TimeoutExpired:
-            sys.stderr.write(f"[{label}] Attempt on {candidate} timed out after {this_timeout}s\n")
+            saw_timeout = True
+            sys.stderr.write(f"[{label}] Attempt on {candidate} timed out after {this_timeout}s; stepping down\n")
         except Exception as exc:
             sys.stderr.write(f"[{label}] Attempt on {candidate} errored: {exc}\n")
 
         if idx + 1 < len(active_candidates) and (deadline_monotonic - time.monotonic()) > 40:
-            backoff = 12.0 + random.uniform(0.0, 8.0)
-            time.sleep(backoff)
+            backoff = 4.0 if saw_timeout else (12.0 + random.uniform(0.0, 8.0))
+            sleeper(backoff)
     return None
 
 
