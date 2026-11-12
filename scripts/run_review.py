@@ -455,7 +455,10 @@ def apply_judge_decisions(candidates: list[dict], decisions_obj: dict | None) ->
         idx = item.get("index")
         act = (item.get("action") or "keep").strip().lower()
         raw_conf = item.get("confidence")
-        conf = int(raw_conf) if isinstance(raw_conf, (int, float)) else 85
+        try:
+            conf = 0 if isinstance(raw_conf, bool) else int(float(raw_conf))
+        except (TypeError, ValueError):
+            conf = 65
         if isinstance(idx, int) and act in ("keep", "drop", "disarm_suggestion"):
             decision_by_idx[idx] = (act, conf)
 

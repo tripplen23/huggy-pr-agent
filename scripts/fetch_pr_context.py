@@ -348,13 +348,39 @@ def extract_error_excerpt(log_text: str, max_chars: int = 1500) -> str:
     return "\n".join(picked)[-max_chars:]
 
 
+class _StripCrossOriginAuthRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Strip `Authorization` when GitHub redirects `/logs` to external blob storage."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and redirected.host != req.host:
+            redirected.headers.pop("Authorization", None)
+            redirected.unredirected_hdrs.pop("Authorization", None)
+        return redirected
+
+
+def _read_bounded_tail(resp, max_bytes: int = 262144) -> bytes:
+    """Read response stream in 64KB chunks, keeping at most the trailing `max_bytes`."""
+    tail = bytearray()
+    while True:
+        chunk = resp.read(65536)
+        if not chunk:
+            break
+        tail.extend(chunk)
+        if len(tail) > max_bytes * 2:
+            del tail[:-max_bytes]
+    return bytes(tail[-max_bytes:])
+
+
 def fetch_failed_check_logs(
     repo: str,
     token: str,
     gql_data: dict,
-    opener=urllib.request.urlopen,
+    opener=None,
 ) -> str:
     """Fetch bounded failure log excerpts for up to 2 failing GitHub Actions CheckRuns on the PR head."""
+    if opener is None:
+        opener = urllib.request.build_opener(_StripCrossOriginAuthRedirectHandler()).open
     pr = (((gql_data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
     commits = ((pr.get("commits") or {}).get("nodes")) or []
     if not commits:
@@ -386,7 +412,7 @@ def fetch_failed_check_logs(
         )
         try:
             with opener(req, timeout=8) as resp:
-                raw_log = resp.read().decode("utf-8", errors="replace")
+                raw_log = _read_bounded_tail(resp, max_bytes=262144).decode("utf-8", errors="replace")
             snippet = extract_error_excerpt(raw_log, max_chars=1500)
             if snippet:
                 excerpts.append(f"#### Failed check: `{cname}`\n```\n{snippet}\n```")

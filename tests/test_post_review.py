@@ -419,8 +419,8 @@ const count = 1;
             parsed["candidates"],
             {
                 "decisions": [
-                    {"index": 0, "action": "drop", "reason": "guard exists at L8"},
-                    {"index": 1, "action": "disarm_suggestion", "reason": "incomplete"},
+                    {"index": 0, "confidence": 10, "action": "drop", "reason": "guard exists at L8"},
+                    {"index": 1, "confidence": 75, "action": "disarm_suggestion", "reason": "incomplete"},
                 ]
             },
         )
