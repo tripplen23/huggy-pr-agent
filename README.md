@@ -38,19 +38,27 @@ While a review pipeline is running, Huggy shows a compact pixel-art status indic
 
 ## Quick Start
 
-### Option A — 10-Second Setup with Any Coding Agent *(Recommended)*
+### Option A — Install as a Pi Package or Cross-Harness Skill
 
-Paste this prompt into **Claude Code, Pi, Cursor, Codex, Windsurf, or OpenCode** inside your repository:
+Use Huggy locally inside your terminal **and** set up GitHub Actions in one command:
+
+```bash
+# In Pi (adds /huggy review, /huggy setup, /huggy sync, and huggy_prepare_diff):
+pi install git:github.com/tripplen23/huggy-pr-agent
+
+# In Claude Code, Codex, Cursor, Windsurf, or OpenCode (Agent Skills standard):
+npx skills add tripplen23/huggy-pr-agent
+```
+
+Or paste this single prompt into **any** coding agent inside your repository:
 
 ```text
 Read https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/INSTALL.md and set up Huggy PR Agent on this repository, tailoring setup_cmd, verify_cmd, and guarded_paths to our stack.
 ```
 
-*(Or install as a skill via `npx skills add tripplen23/huggy-pr-agent` — see [`INSTALL.md`](INSTALL.md).)*
-
 ---
 
-### Option B — Manual 2-Minute Setup
+### Option B — Manual 2-Minute GitHub Action Setup
 
 #### Step 1 — Add Your Model API Key Secret
 
@@ -131,10 +139,14 @@ jobs:
 
 > **macOS / Swift projects**: keep `review` on `ubuntu-latest` (fast & low-cost) and run `command` on `macos-15` so `swift test` gates `@huggy` commits — see [`examples/swift-macos.yml`](examples/swift-macos.yml).
 
-#### Step 3 — Merge to Default Branch (`main` / `master`)
+#### Step 3 — Merge to Default Branch & Stay Up to Date
 
 - **Automatic PR review (`pull_request`)** works immediately — including on the PR that adds `.github/workflows/huggy.yml`.
 - **Interactive comment commands (`issue_comment`, `pull_request_review_comment`)** activate as soon as `.github/workflows/huggy.yml` lands on your default branch.
+- **Staying in sync with upstream updates:**
+  - **Zero-click automatic updates:** Referencing `tripplen23/huggy-pr-agent@v1` automatically picks up every engine, Judge, and prompt improvement as soon as a new `v1.x` release ships.
+  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.8.0` and drop [`examples/dependabot.yml`](examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
+  - **Local Pi package updates:** Run `pi update --extensions` (and `/huggy sync` inside any repo to refresh workflow templates).
 
 ---
 

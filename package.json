@@ -1,0 +1,55 @@
+{
+  "name": "huggy-pr-agent",
+  "version": "1.8.0",
+  "description": "Repository-aware PR code reviews, 1-click commit suggestions, and test-gated @huggy auto-fixes — as a GitHub Action, Pi Package, and cross-harness Agent Skill.",
+  "license": "MIT",
+  "author": "Binh Duc Nguyen",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tripplen23/huggy-pr-agent.git"
+  },
+  "homepage": "https://github.com/tripplen23/huggy-pr-agent#readme",
+  "bugs": {
+    "url": "https://github.com/tripplen23/huggy-pr-agent/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "code-review",
+    "pull-request",
+    "github-actions",
+    "ai-review",
+    "agent-skills"
+  ],
+  "files": [
+    "action.yml",
+    "INSTALL.md",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE",
+    "extensions",
+    "skills",
+    "pi-prompts",
+    "prompts",
+    "scripts",
+    "assets",
+    "examples"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/huggy.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./pi-prompts/*.md"
+    ],
+    "changelogPath": "./CHANGELOG.md",
+    "image": "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/inline-review-preview.png"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
