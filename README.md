@@ -1,53 +1,56 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="Huggy PR Agent" width="100%" />
-
 <br />
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg" />
+  <img alt="Huggy" src="assets/banner-dark.svg" height="68" />
+</picture>
+
+<p><strong>Repository-aware pull request reviews and <code>@huggy</code> fixes, powered by Pi.</strong></p>
 
 [![CI](https://github.com/tripplen23/huggy-pr-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tripplen23/huggy-pr-agent/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/tripplen23/huggy-pr-agent?color=ffcc4d&label=release)](https://github.com/tripplen23/huggy-pr-agent/releases)
-[![Powered by Pi](https://img.shields.io/badge/agent-%40earendil--works%2Fpi--coding--agent-f97316)](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Zero-infrastructure GitHub Action for repository-aware inline PR reviews, 1-click code suggestions, and test-gated `@huggy` auto-fixes.**
-
-[Quick Start](#-quick-start) · [Google Vertex & Providers](#️-model-providers--google-vertex-ai) · [Commands](#-commands--capabilities) · [How It Works](#-how-it-works-deterministic--agent-hybrid) · [Configuration](#️-configuration--inputs) · [Agent Install Spec](INSTALL.md)
+[Quick Start](#quick-start) · [Providers & Vertex AI](#model-providers--google-vertex-ai) · [Commands](#commands--capabilities) · [How It Works](#how-it-works) · [Configuration](#configuration--inputs) · [Agent Install Spec](INSTALL.md)
 
 </div>
 
 ---
 
-## ✨ What It Looks Like on Your PR
+## Preview
 
-While a review pipeline is actively running, **Huggy** displays a live animated status card with the review scope — then automatically hides the animation once finished, leaving a clean summary badge and inline diff comments:
+While a review pipeline is running, Huggy shows a compact pixel-art status indicator, then replaces it with a clean summary and inline diff comments once finished:
 
 <div align="center">
-  <img src="assets/huggy-reviewing.svg" alt="Huggy PR Agent Pixel-Art Live Reviewing Animation" width="208" />
+  <img src="assets/huggy-reviewing.svg" alt="Huggy reviewing animation" width="208" />
 </div>
 
 <br />
 
 <div align="center">
-  <img src="assets/inline-review-preview.png" alt="Huggy PR Agent Inline Review and Resolution on GitHub" width="96%" />
+  <img src="assets/inline-review-preview.png" alt="Huggy inline review on GitHub" width="96%" />
 </div>
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### 🤖 Option A — 10-Second Setup with Any Coding Agent *(Recommended)*
+### Option A — 10-Second Setup with Any Coding Agent *(Recommended)*
 
-Paste this single prompt into **Claude Code, Pi, Cursor, Codex, Windsurf, or OpenCode** inside your repository:
+Paste this prompt into **Claude Code, Pi, Cursor, Codex, Windsurf, or OpenCode** inside your repository:
 
 ```text
 Read https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/INSTALL.md and set up Huggy PR Agent on this repository, tailoring setup_cmd, verify_cmd, and guarded_paths to our stack.
 ```
 
-*(Or install as an agent skill via `npx skills add tripplen23/huggy-pr-agent` — see [`INSTALL.md`](INSTALL.md) for the full agent playbook.)*
+*(Or install as a skill via `npx skills add tripplen23/huggy-pr-agent` — see [`INSTALL.md`](INSTALL.md).)*
 
 ---
 
-### 🛠️ Option B — Manual 2-Minute Setup
+### Option B — Manual 2-Minute Setup
 
 #### Step 1 — Add Your Model API Key Secret
 
@@ -135,7 +138,7 @@ jobs:
 
 ---
 
-## ☁️ Model Providers & Google Vertex AI
+## Model Providers & Google Vertex AI
 
 By default, `huggy-pr-agent` uses `opencode-go/deepseek-v4.1-flash` with `opencode-go/glm-5.3-flash` as an automatic retry fallback. You can switch to **Google Cloud Vertex AI** (to spend GCP credits without recurring `gcloud` RAPT re-login prompts) or any provider supported by Pi:
 
@@ -167,7 +170,7 @@ By default, `huggy-pr-agent` uses `opencode-go/deepseek-v4.1-flash` with `openco
 
 ---
 
-## 🧠 Why `huggy-pr-agent`?
+## Why `huggy-pr-agent`?
 
 Generic AI reviewers fail in two predictable ways: **single-call diff wrappers** cannot search callers outside the diff, while **unconstrained general agents** suffer from line-number drift, skipped files on large PRs, and slow token-burning loops.
 
@@ -185,11 +188,7 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
 
 ---
 
-## 🔧 How It Works: Deterministic × Agent Hybrid
-
-<div align="center">
-  <img src="assets/architecture.svg" alt="Huggy PR Agent Architecture" width="100%" />
-</div>
+## How It Works
 
 1. **Deterministic Context Preparation (`scripts/fetch_pr_context.py`)**
    - Reads root and path-scoped `AGENTS.md` / `CLAUDE.md` / `REVIEW.md` / `.github/instructions/*.instructions.md` (`applyTo` globs) strictly from the **base** branch (`git show base:...`) so an untrusted PR cannot rewrite its own review checklist.
@@ -205,7 +204,7 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
 
 ---
 
-## 💬 Commands & Capabilities
+## Commands & Capabilities
 
 Comment any of these in the **PR conversation**, inside an **inline diff review thread**, or at the bottom of a **Quote reply** (`@pi` and `/pi` aliases work identically to `@huggy` and `/huggy`):
 
@@ -219,7 +218,7 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 
 ---
 
-## ⚙️ Configuration & Inputs
+## Configuration & Inputs
 
 | Input | Default | Description |
 | :--- | :--- | :--- |
@@ -256,7 +255,7 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 
 ---
 
-## 🔒 Security Model
+## Security Model
 
 See [SECURITY.md](SECURITY.md) for the full threat model. Key invariants:
 
@@ -267,7 +266,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model. Key invariants:
 
 ---
 
-## 🤝 Contributing & License
+## Contributing & License
 
 Contributions, bug reports, and prompt improvements are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for local development and testing instructions.
 
