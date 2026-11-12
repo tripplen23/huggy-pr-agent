@@ -1,180 +1,100 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 196" width="800" height="196" role="img" aria-label="Huggy PR Agent — Repository-aware PR reviews &amp; @huggy auto-fixes">
-  <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0B0D12"/>
-      <stop offset="65%" stop-color="#11141C"/>
-      <stop offset="100%" stop-color="#171510"/>
-    </linearGradient>
-    <radialGradient id="spotGold" cx="13%" cy="50%" r="40%">
-      <stop offset="0%" stop-color="#FFCC4D" stop-opacity="0.16"/>
-      <stop offset="70%" stop-color="#FFCC4D" stop-opacity="0.03"/>
-      <stop offset="100%" stop-color="#FFCC4D" stop-opacity="0"/>
-    </radialGradient>
-    <clipPath id="bannerClip">
-      <rect x="1" y="1" width="798" height="194" rx="16"/>
-    </clipPath>
-  </defs>
-
-  <g clip-path="url(#bannerClip)">
-    <rect x="1" y="1" width="798" height="194" rx="16" fill="url(#bgGrad)"/>
-    <rect x="1" y="1" width="798" height="194" fill="url(#spotGold)"/>
-
-    <!-- Stoic 16-Bit Pixel-Art Huggy Mascot -->
-    <g transform="translate(42, 40)" shape-rendering="crispEdges">
-      <rect x="20" y="85" width="50" height="5" fill="#0B0D12"/>
-      <rect x="10" y="90" width="10" height="5" fill="#0B0D12"/>
-      <rect x="20" y="90" width="50" height="5" fill="#232836"/>
-      <rect x="70" y="90" width="10" height="5" fill="#0B0D12"/>
-      <rect x="5" y="95" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="95" width="65" height="5" fill="#232836"/>
-      <rect x="75" y="95" width="5" height="5" fill="#161922"/>
-      <rect x="80" y="95" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="100" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="100" width="10" height="5" fill="#232836"/>
-      <rect x="20" y="100" width="5" height="5" fill="#0B0D12"/>
-      <rect x="25" y="100" width="40" height="5" fill="#232836"/>
-      <rect x="65" y="100" width="5" height="5" fill="#0B0D12"/>
-      <rect x="70" y="100" width="5" height="5" fill="#232836"/>
-      <rect x="75" y="100" width="5" height="5" fill="#161922"/>
-      <rect x="80" y="100" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="105" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="105" width="10" height="5" fill="#232836"/>
-      <rect x="20" y="105" width="5" height="5" fill="#0B0D12"/>
-      <rect x="25" y="105" width="40" height="5" fill="#232836"/>
-      <rect x="65" y="105" width="5" height="5" fill="#0B0D12"/>
-      <rect x="70" y="105" width="5" height="5" fill="#232836"/>
-      <rect x="75" y="105" width="5" height="5" fill="#161922"/>
-      <rect x="80" y="105" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="110" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="110" width="70" height="5" fill="#161922"/>
-      <rect x="80" y="110" width="5" height="5" fill="#0B0D12"/>
-      <rect x="25" y="0" width="40" height="5" fill="#0B0D12"/>
-      <rect x="15" y="5" width="10" height="5" fill="#0B0D12"/>
-      <rect x="25" y="5" width="15" height="5" fill="#FFDC62"/>
-      <rect x="40" y="5" width="25" height="5" fill="#FFCC4D"/>
-      <rect x="65" y="5" width="10" height="5" fill="#0B0D12"/>
-      <rect x="10" y="10" width="5" height="5" fill="#0B0D12"/>
-      <rect x="15" y="10" width="10" height="5" fill="#FFDC62"/>
-      <rect x="25" y="10" width="15" height="5" fill="#FFF2A6"/>
-      <rect x="40" y="10" width="10" height="5" fill="#FFDC62"/>
-      <rect x="50" y="10" width="25" height="5" fill="#FFCC4D"/>
-      <rect x="75" y="10" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="15" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="15" width="10" height="5" fill="#FFDC62"/>
-      <rect x="20" y="15" width="15" height="5" fill="#FFF2A6"/>
-      <rect x="35" y="15" width="20" height="5" fill="#FFDC62"/>
-      <rect x="55" y="15" width="20" height="5" fill="#FFCC4D"/>
-      <rect x="75" y="15" width="5" height="5" fill="#D99200"/>
-      <rect x="80" y="15" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="20" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="20" width="35" height="5" fill="#FFDC62"/>
-      <rect x="45" y="20" width="30" height="5" fill="#FFCC4D"/>
-      <rect x="75" y="20" width="5" height="5" fill="#D99200"/>
-      <rect x="80" y="20" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="25" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="25" width="80" height="5" fill="#3B4358"/>
-      <rect x="85" y="25" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="30" width="90" height="5" fill="#0B0D12"/>
-      <rect x="0" y="35" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="35" width="5" height="5" fill="#FFCC4D"/>
-      <rect x="10" y="35" width="10" height="5" fill="#0B0D12"/>
-      <rect x="20" y="35" width="5" height="5" fill="#FFFFFF"/>
-      <rect x="25" y="35" width="15" height="5" fill="#161922"/>
-      <rect x="40" y="35" width="10" height="5" fill="#0B0D12"/>
-      <rect x="50" y="35" width="5" height="5" fill="#FFFFFF"/>
-      <rect x="55" y="35" width="15" height="5" fill="#161922"/>
-      <rect x="70" y="35" width="10" height="5" fill="#0B0D12"/>
-      <rect x="80" y="35" width="5" height="5" fill="#FFCC4D"/>
-      <rect x="85" y="35" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="40" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="40" width="5" height="5" fill="#FFCC4D"/>
-      <rect x="10" y="40" width="10" height="5" fill="#0B0D12"/>
-      <rect x="20" y="40" width="5" height="5" fill="#161922"/>
-      <rect x="25" y="40" width="5" height="5" fill="#FFFFFF"/>
-      <rect x="30" y="40" width="10" height="5" fill="#161922"/>
-      <rect x="40" y="40" width="10" height="5" fill="#0B0D12"/>
-      <rect x="50" y="40" width="5" height="5" fill="#161922"/>
-      <rect x="55" y="40" width="5" height="5" fill="#FFFFFF"/>
-      <rect x="60" y="40" width="10" height="5" fill="#161922"/>
-      <rect x="70" y="40" width="10" height="5" fill="#0B0D12"/>
-      <rect x="80" y="40" width="5" height="5" fill="#FFCC4D"/>
-      <rect x="85" y="40" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="45" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="45" width="5" height="5" fill="#FFCC4D"/>
-      <rect x="10" y="45" width="10" height="5" fill="#0B0D12"/>
-      <rect x="20" y="45" width="20" height="5" fill="#161922"/>
-      <rect x="40" y="45" width="10" height="5" fill="#FFCC4D"/>
-      <rect x="50" y="45" width="20" height="5" fill="#161922"/>
-      <rect x="70" y="45" width="10" height="5" fill="#0B0D12"/>
-      <rect x="80" y="45" width="5" height="5" fill="#D99200"/>
-      <rect x="85" y="45" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="50" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="50" width="10" height="5" fill="#FFCC4D"/>
-      <rect x="15" y="50" width="25" height="5" fill="#0B0D12"/>
-      <rect x="40" y="50" width="10" height="5" fill="#FFCC4D"/>
-      <rect x="50" y="50" width="25" height="5" fill="#0B0D12"/>
-      <rect x="75" y="50" width="5" height="5" fill="#FFCC4D"/>
-      <rect x="80" y="50" width="5" height="5" fill="#D99200"/>
-      <rect x="85" y="50" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="55" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="55" width="75" height="5" fill="#FFCC4D"/>
-      <rect x="80" y="55" width="5" height="5" fill="#D99200"/>
-      <rect x="85" y="55" width="5" height="5" fill="#0B0D12"/>
-      <rect x="0" y="60" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="60" width="75" height="5" fill="#FFCC4D"/>
-      <rect x="80" y="60" width="5" height="5" fill="#D99200"/>
-      <rect x="85" y="60" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="65" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="65" width="20" height="5" fill="#FFCC4D"/>
-      <rect x="30" y="65" width="30" height="5" fill="#0B0D12"/>
-      <rect x="60" y="65" width="15" height="5" fill="#FFCC4D"/>
-      <rect x="75" y="65" width="5" height="5" fill="#D99200"/>
-      <rect x="80" y="65" width="5" height="5" fill="#0B0D12"/>
-      <rect x="5" y="70" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="70" width="65" height="5" fill="#FFCC4D"/>
-      <rect x="75" y="70" width="5" height="5" fill="#D99200"/>
-      <rect x="80" y="70" width="5" height="5" fill="#0B0D12"/>
-      <rect x="10" y="75" width="5" height="5" fill="#0B0D12"/>
-      <rect x="15" y="75" width="55" height="5" fill="#FFCC4D"/>
-      <rect x="70" y="75" width="5" height="5" fill="#D99200"/>
-      <rect x="75" y="75" width="5" height="5" fill="#0B0D12"/>
-      <rect x="15" y="80" width="10" height="5" fill="#0B0D12"/>
-      <rect x="25" y="80" width="35" height="5" fill="#FFCC4D"/>
-      <rect x="60" y="80" width="5" height="5" fill="#D99200"/>
-      <rect x="65" y="80" width="10" height="5" fill="#0B0D12"/>
-      <rect x="25" y="85" width="40" height="5" fill="#0B0D12"/>
-    </g>
-
-    <!-- Title & Version Pill -->
-    <text x="166" y="68" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="32" font-weight="800" letter-spacing="-0.5">
-      Huggy <tspan fill="#FFCC4D">PR Agent</tspan>
-    </text>
-    <rect x="436" y="42" width="52" height="26" rx="6" fill="#FFCC4D" fill-opacity="0.14" stroke="#FFCC4D" stroke-opacity="0.45" stroke-width="1.4"/>
-    <text x="462" y="59.5" text-anchor="middle" fill="#FFCC4D" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" font-weight="700">@v1</text>
-
-    <!-- Tagline -->
-    <text x="166" y="100" fill="#E5E7EB" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="13.8" font-weight="500">
-      Full-repo inline PR reviews, 1-click suggestions &amp; test-gated <tspan fill="#FFCC4D" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.8">@huggy</tspan> auto-fixes.
-    </text>
-    <text x="166" y="123" fill="#9CA3AF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="12.2">
-      Powered by Pi · Enforces your <tspan fill="#E5E7EB" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.8">AGENTS.md</tspan> · Scales to 10k+ LOC PRs with a Fact-Check Judge.
-    </text>
-
-    <!-- Feature Pills -->
-    <g transform="translate(166, 144)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.8" font-weight="600">
-      <rect x="0" y="0" width="136" height="28" rx="6" fill="#161922" stroke="#FFCC4D" stroke-opacity="0.40"/>
-      <text x="68" y="18" text-anchor="middle" fill="#FFCC4D">Inline Hunk Guard</text>
-
-      <rect x="144" y="0" width="142" height="28" rx="6" fill="#161922" stroke="#2A3040"/>
-      <text x="215" y="18" text-anchor="middle" fill="#E5E7EB">10k+ LOC Bundling</text>
-
-      <rect x="294" y="0" width="136" height="28" rx="6" fill="#161922" stroke="#2A3040"/>
-      <text x="362" y="18" text-anchor="middle" fill="#E5E7EB">Fact-Check Judge</text>
-
-      <rect x="438" y="0" width="154" height="28" rx="6" fill="#161922" stroke="#2A3040"/>
-      <text x="515" y="18" text-anchor="middle" fill="#E5E7EB">Vertex · OpenCode</text>
-    </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 76" width="280" height="76" role="img" aria-label="Huggy">
+  <g transform="translate(4, 2) scale(0.9)" shape-rendering="crispEdges">
+    <rect x="24" y="4" width="32" height="4" fill="#0B0D12"/>
+    <rect x="16" y="8" width="8" height="4" fill="#0B0D12"/>
+    <rect x="24" y="8" width="12" height="4" fill="#FFDC62"/>
+    <rect x="36" y="8" width="20" height="4" fill="#FFCC4D"/>
+    <rect x="56" y="8" width="8" height="4" fill="#0B0D12"/>
+    <rect x="12" y="12" width="4" height="4" fill="#0B0D12"/>
+    <rect x="16" y="12" width="8" height="4" fill="#FFDC62"/>
+    <rect x="24" y="12" width="12" height="4" fill="#FFF2A6"/>
+    <rect x="36" y="12" width="8" height="4" fill="#FFDC62"/>
+    <rect x="44" y="12" width="20" height="4" fill="#FFCC4D"/>
+    <rect x="64" y="12" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="16" width="4" height="4" fill="#0B0D12"/>
+    <rect x="12" y="16" width="8" height="4" fill="#FFDC62"/>
+    <rect x="20" y="16" width="12" height="4" fill="#FFF2A6"/>
+    <rect x="32" y="16" width="16" height="4" fill="#FFDC62"/>
+    <rect x="48" y="16" width="16" height="4" fill="#FFCC4D"/>
+    <rect x="64" y="16" width="4" height="4" fill="#D99200"/>
+    <rect x="68" y="16" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="20" width="4" height="4" fill="#0B0D12"/>
+    <rect x="12" y="20" width="28" height="4" fill="#FFDC62"/>
+    <rect x="40" y="20" width="24" height="4" fill="#FFCC4D"/>
+    <rect x="64" y="20" width="4" height="4" fill="#D99200"/>
+    <rect x="68" y="20" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="24" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="24" width="64" height="4" fill="#3B4358"/>
+    <rect x="72" y="24" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="28" width="72" height="4" fill="#0B0D12"/>
+    <rect x="4" y="32" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="32" width="4" height="4" fill="#FFCC4D"/>
+    <rect x="12" y="32" width="8" height="4" fill="#0B0D12"/>
+    <rect x="20" y="32" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="24" y="32" width="12" height="4" fill="#161922"/>
+    <rect x="36" y="32" width="8" height="4" fill="#0B0D12"/>
+    <rect x="44" y="32" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="48" y="32" width="12" height="4" fill="#161922"/>
+    <rect x="60" y="32" width="8" height="4" fill="#0B0D12"/>
+    <rect x="68" y="32" width="4" height="4" fill="#FFCC4D"/>
+    <rect x="72" y="32" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="36" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="36" width="4" height="4" fill="#FFCC4D"/>
+    <rect x="12" y="36" width="8" height="4" fill="#0B0D12"/>
+    <rect x="20" y="36" width="4" height="4" fill="#161922"/>
+    <rect x="24" y="36" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="28" y="36" width="8" height="4" fill="#161922"/>
+    <rect x="36" y="36" width="8" height="4" fill="#0B0D12"/>
+    <rect x="44" y="36" width="4" height="4" fill="#161922"/>
+    <rect x="48" y="36" width="4" height="4" fill="#FFFFFF"/>
+    <rect x="52" y="36" width="8" height="4" fill="#161922"/>
+    <rect x="60" y="36" width="8" height="4" fill="#0B0D12"/>
+    <rect x="68" y="36" width="4" height="4" fill="#FFCC4D"/>
+    <rect x="72" y="36" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="40" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="40" width="4" height="4" fill="#FFCC4D"/>
+    <rect x="12" y="40" width="8" height="4" fill="#0B0D12"/>
+    <rect x="20" y="40" width="16" height="4" fill="#161922"/>
+    <rect x="36" y="40" width="8" height="4" fill="#FFCC4D"/>
+    <rect x="44" y="40" width="16" height="4" fill="#161922"/>
+    <rect x="60" y="40" width="8" height="4" fill="#0B0D12"/>
+    <rect x="68" y="40" width="4" height="4" fill="#D99200"/>
+    <rect x="72" y="40" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="44" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="44" width="8" height="4" fill="#FFCC4D"/>
+    <rect x="16" y="44" width="20" height="4" fill="#0B0D12"/>
+    <rect x="36" y="44" width="8" height="4" fill="#FFCC4D"/>
+    <rect x="44" y="44" width="20" height="4" fill="#0B0D12"/>
+    <rect x="64" y="44" width="4" height="4" fill="#FFCC4D"/>
+    <rect x="68" y="44" width="4" height="4" fill="#D99200"/>
+    <rect x="72" y="44" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="48" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="48" width="60" height="4" fill="#FFCC4D"/>
+    <rect x="68" y="48" width="4" height="4" fill="#D99200"/>
+    <rect x="72" y="48" width="4" height="4" fill="#0B0D12"/>
+    <rect x="4" y="52" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="52" width="60" height="4" fill="#FFCC4D"/>
+    <rect x="68" y="52" width="4" height="4" fill="#D99200"/>
+    <rect x="72" y="52" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="56" width="4" height="4" fill="#0B0D12"/>
+    <rect x="12" y="56" width="16" height="4" fill="#FFCC4D"/>
+    <rect x="28" y="56" width="24" height="4" fill="#0B0D12"/>
+    <rect x="52" y="56" width="12" height="4" fill="#FFCC4D"/>
+    <rect x="64" y="56" width="4" height="4" fill="#D99200"/>
+    <rect x="68" y="56" width="4" height="4" fill="#0B0D12"/>
+    <rect x="8" y="60" width="4" height="4" fill="#0B0D12"/>
+    <rect x="12" y="60" width="52" height="4" fill="#FFCC4D"/>
+    <rect x="64" y="60" width="4" height="4" fill="#D99200"/>
+    <rect x="68" y="60" width="4" height="4" fill="#0B0D12"/>
+    <rect x="12" y="64" width="4" height="4" fill="#0B0D12"/>
+    <rect x="16" y="64" width="44" height="4" fill="#FFCC4D"/>
+    <rect x="60" y="64" width="4" height="4" fill="#D99200"/>
+    <rect x="64" y="64" width="4" height="4" fill="#0B0D12"/>
+    <rect x="16" y="68" width="8" height="4" fill="#0B0D12"/>
+    <rect x="24" y="68" width="28" height="4" fill="#FFCC4D"/>
+    <rect x="52" y="68" width="4" height="4" fill="#D99200"/>
+    <rect x="56" y="68" width="8" height="4" fill="#0B0D12"/>
+    <rect x="24" y="72" width="32" height="4" fill="#0B0D12"/>
   </g>
-
-  <rect x="1" y="1" width="798" height="194" rx="16" fill="none" stroke="#FFCC4D" stroke-opacity="0.26" stroke-width="1.2"/>
+  <text x="88" y="53" fill="#F0F6FC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="44" font-weight="800" letter-spacing="-1.2">Huggy<tspan fill="#FFCC4D">.</tspan></text>
 </svg>
