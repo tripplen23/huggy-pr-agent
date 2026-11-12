@@ -228,6 +228,8 @@ def main() -> int:
             fh.write(summary + "\n")
         write_output("go", "true")
         write_output("cmd", cmd)
+        if cmd == "review" and re.match(r"^deep\b", summary, re.IGNORECASE):
+            write_output("review_depth", "deep")
         return 0
 
     if mode == "build-request":

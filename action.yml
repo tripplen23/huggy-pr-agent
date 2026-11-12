@@ -66,6 +66,14 @@ inputs:
     description: "Run an independent tool-free fact-checker pass to drop hallucinated or duplicate findings."
     required: false
     default: "true"
+  review_profile:
+    description: "Noise profile: 'chill' (posts High/Medium inline and collapses Low nitpicks in the summary) or 'assertive' (posts all findings inline)."
+    required: false
+    default: "chill"
+  review_depth:
+    description: "Review pass strategy: 'standard' (single pass per bundle) or 'deep' (parallel Logic+Security specialist lenses merged via Judge)."
+    required: false
+    default: "standard"
   skip_bots:
     description: "Skip automatic pull_request reviews when the PR author is a bot (e.g. Renovate, Dependabot)."
     required: false
@@ -112,7 +120,8 @@ runs:
         PI_VERSION: ${{ inputs.pi_version }}
       run: |
         set -euo pipefail
-        resolved=$(npm view "@earendil-works/pi-coding-agent@$PI_VERSION" version 2>/dev/null || printf '%s' "$PI_VERSION")
+        resolved=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/@earendil-works/pi-coding-agent/$PI_VERSION" 2>/dev/null | jq -r '.version // empty' || true)
+        [ -n "$resolved" ] || resolved=$(npm view "@earendil-works/pi-coding-agent@$PI_VERSION" version 2>/dev/null || printf '%s' "$PI_VERSION")
         echo "version=$resolved" >> "$GITHUB_OUTPUT"
 
     - name: Cache Pi CLI installation
@@ -225,6 +234,7 @@ runs:
         PI_REVIEW_TIMEOUT_MINUTES: ${{ inputs.review_timeout_minutes }}
         PI_MAX_PARALLEL_BUNDLES: ${{ inputs.max_parallel_bundles }}
         PI_JUDGE_PASS: ${{ inputs.judge_pass }}
+        PI_REVIEW_DEPTH: ${{ inputs.review_depth }}
       run: |
         set -euo pipefail
         # shellcheck disable=SC1091
@@ -239,6 +249,7 @@ runs:
         REPO: ${{ github.repository }}
         PR: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PI_REVIEW_PROFILE: ${{ inputs.review_profile }}
       run: |
         set -euo pipefail
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
@@ -373,6 +384,7 @@ runs:
         PI_FIX_TIMEOUT_MINUTES: ${{ inputs.fix_timeout_minutes }}
         PI_MAX_PARALLEL_BUNDLES: ${{ inputs.max_parallel_bundles }}
         PI_JUDGE_PASS: ${{ inputs.judge_pass }}
+        PI_REVIEW_DEPTH: ${{ steps.prepare.outputs.review_depth || inputs.review_depth }}
         RUBRIC_FILE: ${{ inputs.rubric_file }}
         EXTRA_INSTRUCTIONS: ${{ inputs.extra_instructions }}
         COMMENT_BODY: ${{ github.event.comment.body }}
@@ -498,6 +510,7 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
         CMD: ${{ steps.prepare.outputs.cmd }}
+        PI_REVIEW_PROFILE: ${{ inputs.review_profile }}
         GUARDED_PATHS: ${{ inputs.guarded_paths }}
       run: |
         set -euo pipefail

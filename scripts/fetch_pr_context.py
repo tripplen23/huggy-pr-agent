@@ -40,6 +40,7 @@ query($owner: String!, $name: String!, $pr: Int!) {
                 nodes {
                   __typename
                   ... on CheckRun {
+                    databaseId
                     name
                     status
                     conclusion
@@ -100,9 +101,14 @@ IGNORED_FILE_PATTERNS = (
     r"\.min\.(js|css)$",
     r"\.snap$",
     r"\.tsbuildinfo$",
+    r"\.pb\.go$",
+    r"\.(?:gen|generated)\.[a-z0-9]+$",
+    r"(^|/)(?:vendor|dist|__snapshots__)/",
 )
 IGNORED_RE = re.compile("|".join(IGNORED_FILE_PATTERNS))
 REVIEW_SHA_RE = re.compile(r"^<!--\s*pi-review(?:\s+sha=([0-9a-fA-F]{7,40}))?\s*-->")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+UNTRUSTED_RULE_DIRS = {"test", "tests", "__tests__", "fixtures", "snapshots", "__snapshots__", "vendor", "node_modules", "dist", "generated"}
 
 LANGUAGE_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (
@@ -138,11 +144,300 @@ LANGUAGE_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
 )
 
 
-def is_ignored_path(path: str) -> bool:
-    return bool(IGNORED_RE.search(path))
+def expand_brace_globs(pattern: str) -> list[str]:
+    """Expand a single `{a,b,c}` brace group (`**/*.{ts,tsx}` -> `['**/*.ts', '**/*.tsx']`)."""
+    m = re.search(r"\{([^{}]+)\}", pattern)
+    if not m:
+        return [pattern]
+    prefix, opts, suffix = pattern[: m.start()], m.group(1).split(","), pattern[m.end() :]
+    out: list[str] = []
+    for opt in opts:
+        out.extend(expand_brace_globs(f"{prefix}{opt.strip()}{suffix}"))
+    return out
 
 
-def parse_annotated_files(diff_text: str) -> list[dict]:
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Compile a gitattributes / instructions glob (`**/*.ts`, `*.pb.go`, `src/**`) to regex."""
+    pat = pattern.strip()
+    dir_prefix = pat.endswith("/")
+    anchored = "/" in pat.rstrip("/")
+    pat = pat.lstrip("/").rstrip("/")
+    out = ["^" if anchored else "(?:^|/)"]
+    i = 0
+    while i < len(pat):
+        ch = pat[i]
+        if ch == "*":
+            if i + 1 < len(pat) and pat[i + 1] == "*":
+                if i + 2 < len(pat) and pat[i + 2] == "/":
+                    out.append("(?:.*/)?")
+                    i += 3
+                    continue
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*")
+        elif ch == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    out.append("(?:/.*)?$" if dir_prefix else "$")
+    return re.compile("".join(out))
+
+
+def glob_matches_path(pattern: str, path: str) -> bool:
+    if not pattern.strip():
+        return False
+    return any(bool(glob_to_regex(exp).search(path)) for exp in expand_brace_globs(pattern))
+
+
+def parse_gitattributes_generated(gitattributes_text: str) -> list[dict]:
+    """Parse ordered `linguist-generated` / `linguist-vendored` rules (including `-attr` overrides)."""
+    rules: list[dict] = []
+    for raw in (gitattributes_text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        pat, attrs = parts[0], parts[1:]
+        for attr in attrs:
+            low = attr.lower()
+            for key in ("linguist-generated", "linguist-vendored"):
+                if low in (key, f"{key}=true"):
+                    rules.append({"pattern": pat, "attr": key, "enabled": True})
+                elif low in (f"-{key}", f"!{key}", f"{key}=false"):
+                    rules.append({"pattern": pat, "attr": key, "enabled": False})
+    return rules
+
+
+def load_base_git_file(path: str, base_ref: str = "base") -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "show", f"{base_ref}:{path}"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return ""
+
+
+def parse_instructions_frontmatter(text: str) -> tuple[list[str], str, str]:
+    """Return `(apply_to_globs, exclude_agent, body)` from `.instructions.md` YAML frontmatter."""
+    if not text.startswith("---"):
+        return ["**"], "", text.strip()
+    end = text.find("\n---", 3)
+    if end == -1:
+        return ["**"], "", text.strip()
+    fm = text[3:end]
+    body = text[end + 4 :].lstrip("\r\n").strip()
+    apply_to: list[str] = []
+    exclude_agent = ""
+    for ln in fm.splitlines():
+        m_apply = re.match(r"^\s*applyTo\s*:\s*(.+)$", ln)
+        if m_apply:
+            val = m_apply.group(1).strip().strip("\"'")
+            apply_to = [g.strip().strip("\"'") for g in re.split(r",(?![^{}]*\})", val) if g.strip()]
+        m_excl = re.match(r"^\s*excludeAgent\s*:\s*(.+)$", ln)
+        if m_excl:
+            exclude_agent = m_excl.group(1).strip().strip("\"'").lower()
+    return (apply_to or ["**"]), exclude_agent, body
+
+
+def collect_scoped_rules(
+    changed_paths: list[str],
+    base_files: dict[str, str] | None = None,
+    base_ref: str = "base",
+    max_chars: int = 24000,
+) -> str:
+    """Resolve base-branch `REVIEW.md`, `.github/copilot-instructions.md`, ancestor `AGENTS.md`/`CLAUDE.md`,
+    and glob-matched `.github/instructions/*.instructions.md` for `changed_paths`."""
+    if not changed_paths:
+        return ""
+
+    if base_files is not None:
+        all_base_paths = set(base_files.keys())
+        read_fn = lambda p: base_files.get(p, "")
+    else:
+        try:
+            tree_out = subprocess.check_output(
+                ["git", "ls-tree", "-r", "--name-only", base_ref],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            all_base_paths = {ln.strip() for ln in tree_out.splitlines() if ln.strip()}
+        except Exception:
+            return ""
+        read_fn = lambda p: load_base_git_file(p, base_ref=base_ref)
+
+    sections: list[str] = []
+    used_chars = 0
+
+    def add_section(label: str, content: str) -> None:
+        nonlocal used_chars
+        body = (content or "").strip()
+        if not body or used_chars >= max_chars:
+            return
+        budget = max_chars - used_chars
+        clipped = body[:budget]
+        sections.append(f"#### `{label}`\n\n{clipped}")
+        used_chars += len(clipped)
+
+    # 1. Root REVIEW.md and .github/copilot-instructions.md (root AGENTS.md/CLAUDE.md is already in system prompt)
+    for root_doc in ("REVIEW.md", ".github/copilot-instructions.md"):
+        if root_doc in all_base_paths:
+            add_section(root_doc, read_fn(root_doc))
+
+    # 2. Ancestor directory AGENTS.md / CLAUDE.md / REVIEW.md along changed paths
+    candidate_dirs: list[str] = []
+    seen_dirs: set[str] = set()
+    for cp in changed_paths:
+        parts = cp.strip("/").split("/")[:-1]
+        for depth in range(1, len(parts) + 1):
+            sub_parts = parts[:depth]
+            if any(seg.lower() in UNTRUSTED_RULE_DIRS for seg in sub_parts):
+                break
+            d = "/".join(sub_parts)
+            if d not in seen_dirs:
+                seen_dirs.add(d)
+                candidate_dirs.append(d)
+
+    for d in sorted(candidate_dirs):
+        for fname in ("AGENTS.md", "CLAUDE.md", "REVIEW.md"):
+            rel = f"{d}/{fname}"
+            if rel in all_base_paths:
+                add_section(rel, read_fn(rel))
+
+    # 3. Path-scoped `.github/instructions/*.instructions.md`
+    instr_files = sorted(
+        p for p in all_base_paths if p.startswith(".github/instructions/") and p.endswith(".instructions.md")
+    )
+    for ipath in instr_files:
+        raw = read_fn(ipath)
+        if not raw:
+            continue
+        globs, excl, body = parse_instructions_frontmatter(raw)
+        if "code-review" in excl or not body:
+            continue
+        if any(glob_matches_path(g, cp) for g in globs for cp in changed_paths):
+            add_section(f"{ipath} (applyTo: {', '.join(globs)})", body)
+
+    return "\n\n".join(sections)
+
+
+def extract_error_excerpt(log_text: str, max_chars: int = 1500) -> str:
+    """Extract high-signal failure lines (`##[error]`, `FAIL`, `Error:`, `Traceback`, `panic:`) from a CI log."""
+    clean = ANSI_RE.sub("", log_text or "")
+    lines = [ln.rstrip() for ln in clean.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    err_re = re.compile(r"(?:##\[error\]|\bFAIL(?:ED)?\b|\bERROR\b|Error:|Exception:|Traceback|AssertionError|panic:)")
+    picked: list[str] = []
+    seen_idx: set[int] = set()
+    for idx, ln in enumerate(lines):
+        if err_re.search(ln):
+            for j in range(max(0, idx - 1), min(len(lines), idx + 3)):
+                if j not in seen_idx:
+                    seen_idx.add(j)
+                    picked.append(lines[j])
+            if sum(len(x) for x in picked) >= max_chars:
+                break
+    if not picked:
+        picked = lines[-20:]
+    return "\n".join(picked)[-max_chars:]
+
+
+class _StripCrossOriginAuthRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Strip `Authorization` when GitHub redirects `/logs` to external blob storage."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and redirected.host != req.host:
+            redirected.headers.pop("Authorization", None)
+            redirected.unredirected_hdrs.pop("Authorization", None)
+        return redirected
+
+
+def _read_bounded_tail(resp, max_bytes: int = 262144) -> bytes:
+    """Read response stream in 64KB chunks, keeping at most the trailing `max_bytes`."""
+    tail = bytearray()
+    while True:
+        chunk = resp.read(65536)
+        if not chunk:
+            break
+        tail.extend(chunk)
+        if len(tail) > max_bytes * 2:
+            del tail[:-max_bytes]
+    return bytes(tail[-max_bytes:])
+
+
+def fetch_failed_check_logs(
+    repo: str,
+    token: str,
+    gql_data: dict,
+    opener=None,
+) -> str:
+    """Fetch bounded failure log excerpts for up to 2 failing GitHub Actions CheckRuns on the PR head."""
+    if opener is None:
+        opener = urllib.request.build_opener(_StripCrossOriginAuthRedirectHandler()).open
+    pr = (((gql_data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
+    commits = ((pr.get("commits") or {}).get("nodes")) or []
+    if not commits:
+        return ""
+    last_commit = (commits[-1] or {}).get("commit") or {}
+    ctx_nodes = (((last_commit.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes")) or []
+
+    failed_jobs: list[tuple[int, str]] = []
+    for cn in ctx_nodes:
+        if not cn or cn.get("__typename") != "CheckRun":
+            continue
+        cname = (cn.get("name") or "").strip()
+        low = cname.lower()
+        if not cname or re.search(r"\b(?:huggy|pi)\b", low) or low == "review":
+            continue
+        if (cn.get("conclusion") or "").upper() == "FAILURE" and isinstance(cn.get("databaseId"), int):
+            failed_jobs.append((cn["databaseId"], cname))
+
+    excerpts: list[str] = []
+    for job_id, cname in failed_jobs[:2]:
+        url = f"https://api.github.com/repos/{repo}/actions/jobs/{job_id}/logs"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "huggy-pr-agent",
+            },
+        )
+        try:
+            with opener(req, timeout=8) as resp:
+                raw_log = _read_bounded_tail(resp, max_bytes=262144).decode("utf-8", errors="replace")
+            snippet = extract_error_excerpt(raw_log, max_chars=1500)
+            if snippet:
+                excerpts.append(f"#### Failed check: `{cname}`\n```\n{snippet}\n```")
+        except Exception:
+            continue
+    return "\n\n".join(excerpts)
+
+
+def is_ignored_path(path: str, extra_generated_globs: list | None = None) -> bool:
+    if IGNORED_RE.search(path):
+        return True
+    if extra_generated_globs:
+        state = {"linguist-generated": False, "linguist-vendored": False}
+        for item in extra_generated_globs:
+            if isinstance(item, str):
+                if glob_matches_path(item, path):
+                    return True
+            elif isinstance(item, dict) and glob_matches_path(item.get("pattern") or "", path):
+                state[item.get("attr") or "linguist-generated"] = bool(item.get("enabled"))
+        if any(state.values()):
+            return True
+    return False
+
+
+def parse_annotated_files(diff_text: str, extra_generated_globs: list[str] | None = None) -> list[dict]:
     """Parse `git -c core.quotePath=false diff` into per-file dicts with `L<num>` line prefixes."""
     files: list[dict] = []
     cur_path: str | None = None
@@ -183,7 +478,7 @@ def parse_annotated_files(diff_text: str) -> list[dict]:
                 p = codecs.escape_decode(p[1:-1].encode("utf-8"))[0].decode("utf-8", errors="replace")
             if p.startswith("b/"):
                 cur_path = p[2:]
-                skip_file = is_ignored_path(cur_path)
+                skip_file = is_ignored_path(cur_path, extra_generated_globs)
             else:
                 cur_path = None
                 skip_file = True
@@ -261,6 +556,9 @@ def format_pr_context(
     bundle_files: list[dict] | None = None,
     sibling_files: list[dict] | None = None,
     bundle_label: str = "",
+    extra_generated_globs: list[str] | None = None,
+    scoped_rules_md: str = "",
+    failed_ci_logs: str = "",
 ) -> str:
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
     if not pr:
@@ -332,7 +630,7 @@ def format_pr_context(
             tname = cn.get("__typename")
             if tname == "CheckRun":
                 cname = (cn.get("name") or "").strip()
-                if not cname or "pi" in cname.lower() or cname == "review":
+                if not cname or re.search(r"\b(?:huggy|pi)\b", cname.lower()) or cname == "review":
                     continue
                 cstatus = cn.get("conclusion") or cn.get("status") or "UNKNOWN"
                 ci_lines.append(f"  - `{cname}`: **{cstatus}**")
@@ -345,17 +643,38 @@ def format_pr_context(
                 ci_lines.append(f"  - `{cname}`: **{cstate}**" + (f" ({desc})" if desc else ""))
         if ci_lines:
             out += ["", "### CI & Test Status on Latest Commit", "", *ci_lines]
+        if failed_ci_logs.strip():
+            out += [
+                "",
+                "### Failed CI Log Excerpts",
+                "If a failure below is caused by code changed in this PR, pinpoint the exact offending diff line and suggest the fix:",
+                "",
+                failed_ci_logs.strip(),
+            ]
+
+    if scoped_rules_md.strip():
+        out += [
+            "",
+            "### Path-Scoped Repository Rules (from `base` branch)",
+            "These path-specific rules from the base branch apply to the files changed in this review:",
+            "",
+            scoped_rules_md.strip(),
+        ]
 
     if body:
         out += ["", "### Current PR Description", "", body]
     else:
         out += ["", "### Current PR Description", "", "*(empty — no PR description provided yet)*"]
 
-    parsed_files = bundle_files if bundle_files is not None else (parse_annotated_files(diff_text) if diff_text else [])
+    parsed_files = (
+        bundle_files
+        if bundle_files is not None
+        else (parse_annotated_files(diff_text, extra_generated_globs) if diff_text else [])
+    )
     bundle_path_set = {f["path"] for f in parsed_files}
 
     if incremental_diff_text and last_reviewed_sha:
-        inc_parsed = parse_annotated_files(incremental_diff_text)
+        inc_parsed = parse_annotated_files(incremental_diff_text, extra_generated_globs)
         if bundle_files is not None:
             inc_parsed = [f for f in inc_parsed if f["path"] in bundle_path_set]
         if inc_parsed:
@@ -581,9 +900,17 @@ def main() -> int:
             "User-Agent": "pi-pr-agent",
         },
     )
+    gitattributes_globs = parse_gitattributes_generated(load_base_git_file(".gitattributes"))
+    changed_paths = [f["path"] for f in parse_annotated_files(diff_text, gitattributes_globs)] if diff_text else []
+    scoped_rules_md = collect_scoped_rules(changed_paths)
+    scoped_rules_path = os.path.join(temp, "scoped-rules.md")
+    with open(scoped_rules_path, "w", encoding="utf-8") as sfh:
+        sfh.write(scoped_rules_md)
+
     data: dict = {}
     last_sha: str | None = None
     inc_diff = ""
+    failed_ci_logs = ""
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -591,6 +918,7 @@ def main() -> int:
         issue_comments = ((pr_node.get("comments") or {}).get("nodes")) or []
         last_sha = find_last_reviewed_sha(issue_comments)
         inc_diff = compute_incremental_diff(last_sha) if last_sha else ""
+        failed_ci_logs = fetch_failed_check_logs(repo, token, data)
         md = format_pr_context(
             data,
             comment_id=comment_id,
@@ -598,6 +926,9 @@ def main() -> int:
             incremental_diff_text=inc_diff,
             last_reviewed_sha=last_sha,
             annotated_diff_path=annotated_path,
+            extra_generated_globs=gitattributes_globs,
+            scoped_rules_md=scoped_rules_md,
+            failed_ci_logs=failed_ci_logs,
         )
     except Exception as exc:
         sys.stderr.write(f"warning: could not fetch PR context ({exc}); continuing without it\n")
@@ -609,6 +940,8 @@ def main() -> int:
                 "graphql": data,
                 "last_reviewed_sha": last_sha,
                 "incremental_diff": inc_diff,
+                "gitattributes_globs": gitattributes_globs,
+                "failed_ci_logs": failed_ci_logs,
             },
             mfh,
         )
