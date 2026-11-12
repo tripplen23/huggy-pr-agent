@@ -305,7 +305,8 @@ def parse_review_markdown(
         else:
             full_path = safe_worktree_file(worktree_root, f["path"])
             if full_path:
-                file_lines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
+                with open(full_path, encoding="utf-8", errors="replace") as fh:
+                    file_lines = fh.read().splitlines()
                 snapped_window = relocate_suggestion_window(
                     body_text, file_lines, f["path"], f["start"], f["end"], hunk_of
                 )
@@ -440,7 +441,7 @@ def main() -> int:
     """
     open_threads: dict[tuple[str, int, int], list[tuple[int | None, str]]] = {}
     stale_thread_ids: list[str] = []
-    new_targets = {(f["path"], f["eff_start"], f["end"]) for f in inline_candidates if f["end_hunk"] is not None}
+    new_targets = {(f["path"], f["eff_start"], f["end"]) for f in findings if f["end_hunk"] is not None}
     try:
         gql = (
             api(

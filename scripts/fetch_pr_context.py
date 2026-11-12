@@ -144,11 +144,24 @@ LANGUAGE_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
 )
 
 
+def expand_brace_globs(pattern: str) -> list[str]:
+    """Expand a single `{a,b,c}` brace group (`**/*.{ts,tsx}` -> `['**/*.ts', '**/*.tsx']`)."""
+    m = re.search(r"\{([^{}]+)\}", pattern)
+    if not m:
+        return [pattern]
+    prefix, opts, suffix = pattern[: m.start()], m.group(1).split(","), pattern[m.end() :]
+    out: list[str] = []
+    for opt in opts:
+        out.extend(expand_brace_globs(f"{prefix}{opt.strip()}{suffix}"))
+    return out
+
+
 def glob_to_regex(pattern: str) -> re.Pattern[str]:
     """Compile a gitattributes / instructions glob (`**/*.ts`, `*.pb.go`, `src/**`) to regex."""
     pat = pattern.strip()
+    dir_prefix = pat.endswith("/")
     anchored = "/" in pat.rstrip("/")
-    pat = pat.lstrip("/")
+    pat = pat.lstrip("/").rstrip("/")
     out = ["^" if anchored else "(?:^|/)"]
     i = 0
     while i < len(pat):
@@ -168,19 +181,19 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
         else:
             out.append(re.escape(ch))
         i += 1
-    out.append("(?:$|/)")
+    out.append("(?:/.*)?$" if dir_prefix else "$")
     return re.compile("".join(out))
 
 
 def glob_matches_path(pattern: str, path: str) -> bool:
     if not pattern.strip():
         return False
-    return bool(glob_to_regex(pattern).search(path))
+    return any(bool(glob_to_regex(exp).search(path)) for exp in expand_brace_globs(pattern))
 
 
-def parse_gitattributes_generated(gitattributes_text: str) -> list[str]:
-    """Extract glob patterns marked `linguist-generated` or `linguist-vendored`."""
-    globs: list[str] = []
+def parse_gitattributes_generated(gitattributes_text: str) -> list[dict]:
+    """Parse ordered `linguist-generated` / `linguist-vendored` rules (including `-attr` overrides)."""
+    rules: list[dict] = []
     for raw in (gitattributes_text or "").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -191,10 +204,12 @@ def parse_gitattributes_generated(gitattributes_text: str) -> list[str]:
         pat, attrs = parts[0], parts[1:]
         for attr in attrs:
             low = attr.lower()
-            if low in ("linguist-generated", "linguist-generated=true", "linguist-vendored", "linguist-vendored=true"):
-                globs.append(pat)
-                break
-    return globs
+            for key in ("linguist-generated", "linguist-vendored"):
+                if low in (key, f"{key}=true"):
+                    rules.append({"pattern": pat, "attr": key, "enabled": True})
+                elif low in (f"-{key}", f"!{key}", f"{key}=false"):
+                    rules.append({"pattern": pat, "attr": key, "enabled": False})
+    return rules
 
 
 def load_base_git_file(path: str, base_ref: str = "base") -> str:
@@ -223,7 +238,7 @@ def parse_instructions_frontmatter(text: str) -> tuple[list[str], str, str]:
         m_apply = re.match(r"^\s*applyTo\s*:\s*(.+)$", ln)
         if m_apply:
             val = m_apply.group(1).strip().strip("\"'")
-            apply_to = [g.strip().strip("\"'") for g in val.split(",") if g.strip()]
+            apply_to = [g.strip().strip("\"'") for g in re.split(r",(?![^{}]*\})", val) if g.strip()]
         m_excl = re.match(r"^\s*excludeAgent\s*:\s*(.+)$", ln)
         if m_excl:
             exclude_agent = m_excl.group(1).strip().strip("\"'").lower()
@@ -353,7 +368,7 @@ def fetch_failed_check_logs(
             continue
         cname = (cn.get("name") or "").strip()
         low = cname.lower()
-        if not cname or "huggy" in low or "pi" in low or cname == "review":
+        if not cname or re.search(r"\b(?:huggy|pi)\b", low) or low == "review":
             continue
         if (cn.get("conclusion") or "").upper() == "FAILURE" and isinstance(cn.get("databaseId"), int):
             failed_jobs.append((cn["databaseId"], cname))
@@ -380,11 +395,19 @@ def fetch_failed_check_logs(
     return "\n\n".join(excerpts)
 
 
-def is_ignored_path(path: str, extra_generated_globs: list[str] | None = None) -> bool:
+def is_ignored_path(path: str, extra_generated_globs: list | None = None) -> bool:
     if IGNORED_RE.search(path):
         return True
     if extra_generated_globs:
-        return any(glob_matches_path(g, path) for g in extra_generated_globs)
+        state = {"linguist-generated": False, "linguist-vendored": False}
+        for item in extra_generated_globs:
+            if isinstance(item, str):
+                if glob_matches_path(item, path):
+                    return True
+            elif isinstance(item, dict) and glob_matches_path(item.get("pattern") or "", path):
+                state[item.get("attr") or "linguist-generated"] = bool(item.get("enabled"))
+        if any(state.values()):
+            return True
     return False
 
 
@@ -581,7 +604,7 @@ def format_pr_context(
             tname = cn.get("__typename")
             if tname == "CheckRun":
                 cname = (cn.get("name") or "").strip()
-                if not cname or "huggy" in cname.lower() or "pi" in cname.lower() or cname == "review":
+                if not cname or re.search(r"\b(?:huggy|pi)\b", cname.lower()) or cname == "review":
                     continue
                 cstatus = cn.get("conclusion") or cn.get("status") or "UNKNOWN"
                 ci_lines.append(f"  - `{cname}`: **{cstatus}**")

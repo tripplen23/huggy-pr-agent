@@ -391,10 +391,6 @@ def parse_raw_candidates(raw_md: str, worktree_root: str = ".") -> dict:
         body_text = "\n".join(c["body_lines"]).strip()
         if not post_review.is_safe_rel_path(worktree_root, c["path"]):
             continue
-        full_path = post_review.safe_worktree_file(worktree_root, c["path"])
-        if full_path:
-            flines = open(full_path, encoding="utf-8", errors="replace").read().splitlines()
-            body_text = post_review.validate_suggestion_against_file(body_text, flines, c["start"], c["end"])
         c["body_text"] = body_text
 
         sev = "medium"
@@ -465,9 +461,16 @@ def apply_judge_decisions(candidates: list[dict], decisions_obj: dict | None) ->
 
     kept: list[dict] = []
     for i, c in enumerate(candidates):
-        act, conf = decision_by_idx.get(i, ("keep", 85))
+        if i not in decision_by_idx:
+            # Missing decision from partial Judge output: demote to Low so unverified items never land inline under chill
+            updated = dict(c)
+            updated["severity"] = "low"
+            updated["rest"] = demote_rest_to_low(updated.get("rest") or "")
+            kept.append(updated)
+            continue
+        act, conf = decision_by_idx[i]
         sev = (c.get("severity") or "medium").lower()
-        if act == "drop" or conf < 65 or (sev == "low" and conf < 72):
+        if act == "drop" or conf < 65:
             sys.stdout.write(f"[judge] Dropped candidate [{i}] {c['path']}:{c['start']}-{c['end']} (conf={conf})\n")
             continue
         updated = dict(c)
@@ -752,11 +755,15 @@ def main() -> int:
 
     succeeded = [i for i in range(len(bundles)) if outputs_by_bundle[i]]
     failed = [i for i in range(len(bundles)) if not outputs_by_bundle[i]]
+    incomplete_lenses = [
+        i for i in succeeded if len(outputs_by_bundle[i]) < len(lenses)
+    ]
     if not succeeded:
         sys.stderr.write("All review bundles failed.\n")
         return 1
 
     all_candidates: list[dict] = []
+    seen_cand_keys: set[tuple[str, int, int, str]] = set()
     max_effort = 1
     any_sec = False
     pr_desc: str | None = None
@@ -765,7 +772,11 @@ def main() -> int:
     for i in succeeded:
         for pass_idx, raw_out in enumerate(outputs_by_bundle[i]):
             parsed = parse_raw_candidates(raw_out)
-            all_candidates.extend(parsed["candidates"])
+            for cand in parsed["candidates"]:
+                ckey = (cand["path"], cand["start"], cand["end"], (cand.get("rest") or "").lower())
+                if ckey not in seen_cand_keys:
+                    seen_cand_keys.add(ckey)
+                    all_candidates.append(cand)
             max_effort = max(max_effort, parsed["effort"])
             any_sec = any_sec or parsed["security_attention"]
             if i == 0 and pr_desc is None and parsed["pr_description"]:
@@ -773,21 +784,25 @@ def main() -> int:
             if len(bundles) == 1 and pass_idx == 0 and parsed["intro_lines"] and not parsed["candidates"]:
                 notes.extend(parsed["intro_lines"])
 
-    if failed:
-        missed_paths = list(dict.fromkeys(f["path"] for i in failed for f in bundles[i]))[:8]
+    has_partial = bool(failed or incomplete_lenses)
+    if failed or incomplete_lenses:
+        bad_idxs = list(dict.fromkeys([*failed, *incomplete_lenses]))
+        missed_paths = list(dict.fromkeys(f["path"] for i in bad_idxs for f in bundles[i]))[:8]
         missed_str = ", ".join(f"`{p}`" for p in missed_paths)
         notes.append(
-            f"> ⚠️ **Partial coverage:** reviewed {len(succeeded)}/{len(bundles)} file bundles within the timeout budget "
-            f"(skipped/timed out on: {missed_str})."
+            f"> ⚠️ **Partial coverage:** some review passes timed out within the budget "
+            f"(affected files: {missed_str})."
         )
 
     if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path) and (deadline - time.monotonic()) > 45:
         judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
+        cand_paths = list(dict.fromkeys(c["path"] for c in all_candidates))
+        judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md
         judge_input = build_judge_input(
             all_candidates,
             judge_prompt,
             gql_data=meta.get("graphql"),
-            scoped_rules_md=scoped_rules_md,
+            scoped_rules_md=judge_rules,
         )
         judge_models = [m for m in (primary_model, fallback_model) if m]
         judge_raw = invoke_pi(
@@ -814,7 +829,7 @@ def main() -> int:
         extra_notes=notes,
         pr_description=pr_desc,
         max_findings=max_findings,
-        has_partial_failure=bool(failed),
+        has_partial_failure=has_partial,
     )
     final_md = redact_secret(final_md, api_key)
     with open("review.md", "w", encoding="utf-8") as fh:

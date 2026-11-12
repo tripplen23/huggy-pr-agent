@@ -662,15 +662,14 @@ const count = 1;
         self.assertEqual(len(assert_inline), 2)
         self.assertEqual(assert_nits, [])
 
-        # 3. `.gitattributes` linguist-generated filtering
+        # 3. `.gitattributes` linguist-generated filtering (including `-linguist-generated` override!)
         gitattr = """
         # Generated DB types and protobufs
-        lib/db-types.ts linguist-generated=true
-        api/gen/** linguist-vendored
+        *.ts linguist-generated=true
         src/real.ts -linguist-generated
+        api/gen/** linguist-vendored
         """
         globs = fetch_pr_context.parse_gitattributes_generated(gitattr)
-        self.assertEqual(globs, ["lib/db-types.ts", "api/gen/**"])
         diff = (
             "diff --git a/lib/db-types.ts b/lib/db-types.ts\n"
             "--- a/lib/db-types.ts\n+++ b/lib/db-types.ts\n@@ -1,1 +1,2 @@\n+export type T = 1;\n"
@@ -679,6 +678,8 @@ const count = 1;
         )
         parsed = fetch_pr_context.parse_annotated_files(diff, globs)
         self.assertEqual([f["path"] for f in parsed], ["src/real.ts"])
+        self.assertFalse(fetch_pr_context.glob_matches_path("src/*", "src/nested/a.ts"))
+        self.assertTrue(fetch_pr_context.glob_matches_path("**/*.{ts,tsx}", "src/nested/a.tsx"))
 
         # 4. Path-scoped base-branch rule resolution (subdirectories + `.instructions.md` + `excludeAgent` + untrusted test dir skip)
         base_files = {
