@@ -3,18 +3,19 @@
 <br />
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg" />
-  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg" />
-  <img alt="Huggy" src="assets/banner-dark.svg" height="68" />
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/banner-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/banner-light.svg" />
+  <img alt="Huggy" src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/banner-dark.svg" height="68" />
 </picture>
 
 <p><strong>Repository-aware pull request reviews and <code>@huggy</code> fixes, powered by Pi.</strong></p>
 
+[![npm](https://img.shields.io/npm/v/huggy-pr-agent?color=ffcc4d&label=npm)](https://www.npmjs.com/package/huggy-pr-agent)
 [![CI](https://github.com/tripplen23/huggy-pr-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tripplen23/huggy-pr-agent/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/tripplen23/huggy-pr-agent?color=ffcc4d&label=release)](https://github.com/tripplen23/huggy-pr-agent/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[Quick Start](#quick-start) · [Providers & Vertex AI](#model-providers--google-vertex-ai) · [Commands](#commands--capabilities) · [How It Works](#how-it-works) · [Configuration](#configuration--inputs) · [Agent Install Spec](INSTALL.md)
+[Quick Start](#quick-start) · [Providers & Vertex AI](#model-providers--google-vertex-ai) · [Commands](#commands--capabilities) · [How It Works](#how-it-works) · [Configuration](#configuration--inputs) · [Agent Install Spec](https://github.com/tripplen23/huggy-pr-agent/blob/main/INSTALL.md)
 
 </div>
 
@@ -25,13 +26,13 @@
 While a review pipeline is running, Huggy shows a compact pixel-art status indicator, then replaces it with a clean summary and inline diff comments once finished:
 
 <div align="center">
-  <img src="assets/huggy-reviewing.svg" alt="Huggy reviewing animation" width="208" />
+  <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-reviewing.svg" alt="Huggy reviewing animation" width="208" />
 </div>
 
 <br />
 
 <div align="center">
-  <img src="assets/inline-review-preview.png" alt="Huggy inline review on GitHub" width="96%" />
+  <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/inline-review-preview.png" alt="Huggy inline review on GitHub" width="96%" />
 </div>
 
 ---
@@ -43,8 +44,8 @@ While a review pipeline is running, Huggy shows a compact pixel-art status indic
 Use Huggy locally inside your terminal **and** set up GitHub Actions in one command:
 
 ```bash
-# In Pi (adds /huggy review, /huggy setup, /huggy sync, and huggy_prepare_diff):
-pi install git:github.com/tripplen23/huggy-pr-agent
+# In Pi (adds /huggy review, /huggy review deep, /huggy setup, /huggy sync, and huggy_prepare_diff):
+pi install npm:huggy-pr-agent
 
 # In Claude Code, Codex, Cursor, Windsurf, or OpenCode (Agent Skills standard):
 npx skills add tripplen23/huggy-pr-agent
