@@ -31,11 +31,15 @@ inputs:
     required: false
     default: ""
   model:
-    description: "Pi model identifier (`provider/model`)."
+    description: "Primary / Lead Pi model identifier (`provider/model`). Reviews the highest-risk bundle and runs the Judge pass."
     required: false
     default: "opencode-go/deepseek-v4.1-flash"
+  wingman_model:
+    description: "Optional Wingman Pi model identifier (`provider/model`) for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Defaults to `model` when empty."
+    required: false
+    default: ""
   fallback_model:
-    description: "Fallback model identifier tried when the primary model is overloaded (429/5xx)."
+    description: "Fallback model identifier tried only when `model` or `wingman_model` errors or times out."
     required: false
     default: "opencode-go/glm-5.3-flash"
   thinking:
@@ -227,6 +231,7 @@ runs:
         PI_GCP_LOCATION: ${{ inputs.gcp_location }}
         PI_GCP_CREDENTIALS_JSON: ${{ inputs.gcp_credentials_json }}
         PI_MODEL: ${{ inputs.model }}
+        PI_WINGMAN_MODEL: ${{ inputs.wingman_model }}
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
         PI_VERSION: ${{ inputs.pi_version }}
@@ -376,6 +381,7 @@ runs:
         PI_GCP_LOCATION: ${{ inputs.gcp_location }}
         PI_GCP_CREDENTIALS_JSON: ${{ inputs.gcp_credentials_json }}
         PI_MODEL: ${{ inputs.model }}
+        PI_WINGMAN_MODEL: ${{ inputs.wingman_model }}
         PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
         PI_THINKING: ${{ inputs.thinking }}
         PI_VERSION: ${{ inputs.pi_version }}

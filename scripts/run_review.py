@@ -44,6 +44,143 @@ COUNTERPART_SUFFIX_RE = re.compile(
     r"(?:[._-](?:test|tests|spec|specs|mock|mocks|view|schema|schemas|types|contract|contracts|dto)|Tests|Test|Spec)$"
 )
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
+HIGH_RISK_PATH_RE = re.compile(
+    r"(?:^|/)(?:migrations?|auth|sign-in|session|billing|stripe|payments?|security|"
+    r"permissions?|guards?|contracts?|outreach|booking|api/v\d+|\.github/workflows|"
+    r"Dockerfile|docker-entrypoint|action\.ya?ml)(?:/|\.|$|-|_)",
+    re.I,
+)
+LOW_RISK_PATH_RE = re.compile(
+    r"(?:^|/)(?:tests?|__tests__|specs?|docs?|examples?|fixtures?)(?:/|$)|\.(?:md|mdx|txt|svg|png|jpg|css)$",
+    re.I,
+)
+SELF_RETRACTION_RE = re.compile(
+    r"\b(?:wait,\s+actually|on second thought,\s+(?:this|it)\s+is\s+(?:safe|fine|already)|actually,\s+looking closer,\s+(?:this|there)\s+is\s+no)\b",
+    re.I,
+)
+
+
+def import_needle_for_path(path: str) -> str | None:
+    """Derive a concise import substring (`research/guards`, `post_review`) to estimate reverse-import blast radius."""
+    norm = path.replace("\\", "/").strip("/")
+    if not norm or LOW_RISK_PATH_RE.search(norm):
+        return None
+    no_ext = re.sub(r"\.[a-zA-Z0-9]+$", "", norm)
+    parts = [p for p in no_ext.split("/") if p]
+    if not parts:
+        return None
+    leaf = parts[-1]
+    if leaf.lower() in ("index", "mod", "main", "__init__") and len(parts) >= 2:
+        needle = "/".join(parts[-2:])
+    elif len(parts) >= 2 and len(leaf) <= 6:
+        needle = "/".join(parts[-2:])
+    elif len(parts) >= 3 and parts[-2].lower() not in ("src", "lib", "app", "pkg", "scripts"):
+        needle = f"{parts[-2]}/{leaf}"
+    else:
+        needle = leaf
+    return needle if len(needle) >= 4 else None
+
+
+def compute_blast_radius(paths: list[str], worktree_root: str = ".") -> dict[str, int]:
+    """Count distinct source files in `worktree_root` importing/referencing each changed module (zero LLM tokens)."""
+    counts: dict[str, int] = {}
+    candidates = [p for p in dict.fromkeys(paths) if import_needle_for_path(p)][:25]
+    if not candidates:
+        return counts
+
+    git_dir = os.path.join(worktree_root, ".git")
+    has_git = os.path.exists(git_dir)
+    cached_files: list[tuple[str, str]] | None = None
+
+    for p in candidates:
+        needle = import_needle_for_path(p)
+        if not needle:
+            continue
+        norm_p = p.replace("\\", "/")
+        if has_git:
+            try:
+                proc = subprocess.run(
+                    ["git", "-C", worktree_root, "grep", "-IlF", needle],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                )
+                if proc.returncode in (0, 1):
+                    hits = [
+                        ln.strip()
+                        for ln in (proc.stdout or "").splitlines()
+                        if ln.strip() and ln.strip().replace("\\", "/") != norm_p
+                    ]
+                    counts[p] = len(hits)
+                    continue
+            except Exception:
+                pass
+
+        if cached_files is None:
+            cached_files = []
+            for root, dirs, fnames in os.walk(worktree_root):
+                dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "vendor", "dist", ".next")]
+                for fn in fnames:
+                    if fn.endswith((".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".swift", ".java", ".rb")):
+                        rel = os.path.relpath(os.path.join(root, fn), worktree_root).replace("\\", "/")
+                        try:
+                            with open(os.path.join(root, fn), encoding="utf-8", errors="replace") as fh:
+                                cached_files.append((rel, fh.read(120_000)))
+                        except OSError:
+                            continue
+                        if len(cached_files) >= 400:
+                            break
+                if len(cached_files) >= 400:
+                    break
+        counts[p] = sum(1 for rel, txt in cached_files if rel != norm_p and needle in txt)
+    return counts
+
+
+def score_file_risk(file_entry: dict, blast_radius: dict[str, int] | None = None) -> int:
+    """Score a changed file by domain criticality, reverse-import blast radius, and diff size."""
+    path = file_entry.get("path") or ""
+    if HIGH_RISK_PATH_RE.search(path):
+        base = 100
+    elif LOW_RISK_PATH_RE.search(path):
+        base = 5
+    else:
+        base = 40
+    deps = min((blast_radius or {}).get(path, 0), 15)
+    size_bonus = min(int(file_entry.get("changed_lines") or 0) // 20, 25)
+    return base + deps * 8 + size_bonus
+
+
+def rank_bundles_by_risk(
+    bundles: list[list[dict]],
+    blast_radius: dict[str, int] | None = None,
+) -> list[list[dict]]:
+    """Order bundles descending by risk so Bundle 1 (`idx == 0`) always goes to the Lead model."""
+    if len(bundles) <= 1:
+        return list(bundles)
+
+    def bundle_score(idx_and_bundle: tuple[int, list[dict]]) -> tuple[int, int]:
+        orig_idx, b = idx_and_bundle
+        scores = [score_file_risk(f, blast_radius) for f in b]
+        peak = max(scores) if scores else 0
+        total = sum(scores)
+        return (-(peak * 10 + total), orig_idx)
+
+    return [b for _, b in sorted(enumerate(bundles), key=bundle_score)]
+
+
+def select_worker_candidates(
+    bundle_idx: int,
+    lens_idx: int,
+    primary_model: str,
+    wingman_model: str,
+    fallback_model: str,
+) -> tuple[str, list[str]]:
+    """Assign Bundle 0 (highest-risk) to `primary_model` (Lead) and remaining concurrent passes to `wingman_model`."""
+    clean_wingman = (wingman_model or "").strip()
+    is_lead = (bundle_idx == 0 and lens_idx == 0) or not clean_wingman or clean_wingman == primary_model
+    if is_lead:
+        return "lead", [m for m in (primary_model, primary_model, fallback_model) if m]
+    return "wingman", [m for m in (clean_wingman, clean_wingman, fallback_model) if m]
 
 
 def stem_family_key(path: str) -> str:
@@ -416,6 +553,8 @@ def parse_raw_candidates(raw_md: str, worktree_root: str = ".") -> dict:
         body_text = "\n".join(c["body_lines"]).strip()
         if not post_review.is_safe_rel_path(worktree_root, c["path"]):
             continue
+        if SELF_RETRACTION_RE.search(body_text):
+            continue
         c["body_text"] = body_text
 
         sev = "medium"
@@ -544,6 +683,9 @@ def build_judge_input(
     resolved_summary = extract_resolved_threads_summary(gql_data or {})
     if resolved_summary:
         blocks.extend(["", "## Previously Resolved Threads on This PR", "", *resolved_summary])
+    downvoted_summary = fetch_pr_context.extract_downvoted_feedback(gql_data or {})
+    if downvoted_summary:
+        blocks.extend(["", "## Downvoted / Rejected Suggestions on This PR (Always Drop)", "", *downvoted_summary])
     blocks.extend(["", "## Candidate Findings to Verify", ""])
     for i, c in enumerate(candidates):
         loc = f"{c['path']}:{c['start']}-{c['end']}" if c["start"] != c["end"] else f"{c['path']}:{c['start']}"
@@ -600,7 +742,7 @@ def assemble_review_markdown(
         sec_str = "Needs attention" if security_attention else "No issues"
 
     out = [
-        "## Review by Pi",
+        "## Review by Huggy",
         "",
         f"**Verdict:** {verdict}",
         f"**Effort:** {max(1, min(5, effort))} · **Security:** {sec_str}",
@@ -672,8 +814,8 @@ def main() -> int:
         return 1
 
     primary_model = os.environ.get("PI_MODEL") or "opencode-go/deepseek-v4.1-flash"
+    wingman_model = (os.environ.get("PI_WINGMAN_MODEL") or "").strip()
     fallback_model = os.environ.get("PI_FALLBACK_MODEL") or ""
-    model_candidates = [m for m in (primary_model, primary_model, fallback_model) if m]
     thinking = os.environ.get("PI_THINKING") or "high"
     review_tools = os.environ.get("PI_REVIEW_TOOLS") or "read,grep,find,ls"
     timeout_input = os.environ.get("PI_REVIEW_TIMEOUT_MINUTES") or "auto"
@@ -696,6 +838,9 @@ def main() -> int:
     scoped_rules_md = open(scoped_rules_path, encoding="utf-8").read() if os.path.isfile(scoped_rules_path) else ""
     gitattributes_globs = meta.get("gitattributes_globs") or []
     failed_ci_logs = meta.get("failed_ci_logs") or ""
+    extra_direct_issues = meta.get("extra_direct_issues") or []
+    if meta.get("has_deep_label"):
+        review_depth = "deep"
 
     parsed_files = fetch_pr_context.parse_annotated_files(diff_text, gitattributes_globs)
     if not parsed_files:
@@ -709,7 +854,8 @@ def main() -> int:
         print("Skipped LLM call: 0 reviewable files after filtering.")
         return 0
 
-    bundles = bundle_review_files(parsed_files)
+    blast_radius = compute_blast_radius([f["path"] for f in parsed_files])
+    bundles = rank_bundles_by_risk(bundle_review_files(parsed_files), blast_radius)
     lenses: list[tuple[str, str]] = (
         [("logic", DEEP_LOGIC_LENS), ("security", DEEP_SECURITY_LENS)]
         if review_depth == "deep"
@@ -721,17 +867,21 @@ def main() -> int:
         timeout_input, total_passes, total_lines, max_parallel
     )
     deadline = time.monotonic() + total_budget_sec
+    pool_desc = f"lead={primary_model}" + (f", wingman={wingman_model}" if wingman_model else "") + (f", fallback={fallback_model}" if fallback_model else "")
     print(
         f"Review plan: {len(parsed_files)} files ({total_lines} changed lines) -> "
-        f"{len(bundles)} bundle(s) x {len(lenses)} lens(es) ({review_depth}), "
-        f"parallel={min(max_parallel, total_passes)}, budget={total_budget_sec // 60}m."
+        f"{len(bundles)} risk-ranked bundle(s) x {len(lenses)} lens(es) ({review_depth}), "
+        f"parallel={min(max_parallel, total_passes)}, budget={total_budget_sec // 60}m ({pool_desc})."
     )
 
-    def run_pass(idx: int, b_files: list[dict], lens_name: str, lens_suffix: str) -> tuple[int, str, str | None]:
+    def run_pass(idx: int, lens_idx: int, b_files: list[dict], lens_name: str, lens_suffix: str) -> tuple[int, str, str | None]:
         b_paths = {f["path"] for f in b_files}
         siblings = [f for f in parsed_files if f["path"] not in b_paths]
         b_diff_path = os.path.join(temp, f"diff-numbered-b{idx}-{lens_name}.patch")
-        label = f"Bundle {idx + 1}/{len(bundles)}" if len(bundles) > 1 else ""
+        role_name, worker_candidates = select_worker_candidates(
+            idx, lens_idx, primary_model, wingman_model, fallback_model
+        )
+        label = f"Bundle {idx + 1}/{len(bundles)} ({role_name})" if len(bundles) > 1 else ""
         b_scoped_rules = fetch_pr_context.collect_scoped_rules(list(b_paths)) if len(bundles) > 1 else scoped_rules_md
         ctx_md = fetch_pr_context.format_pr_context(
             meta.get("graphql") or {},
@@ -746,6 +896,8 @@ def main() -> int:
             extra_generated_globs=gitattributes_globs,
             scoped_rules_md=b_scoped_rules,
             failed_ci_logs=failed_ci_logs,
+            extra_direct_issues=extra_direct_issues,
+            blast_radius=blast_radius,
         )
         include_desc = len(bundles) == 1 and lens_name in ("standard", "logic")
         t_template = brief_template if include_desc else strip_pr_description_section(brief_template)
@@ -754,28 +906,32 @@ def main() -> int:
         full_prompt = f"{t_template}\n\n{ctx_md}" if ctx_md else t_template
         out = invoke_pi(
             prompt_text=full_prompt,
-            model_candidates=model_candidates,
+            model_candidates=worker_candidates,
             thinking=thinking,
             tools_arg=review_tools,
             rubric_path=rubric_path,
             attempt_timeout_sec=per_bundle_sec,
             deadline_monotonic=deadline,
-            label=f"bundle-{idx + 1}/{len(bundles)}-{lens_name}",
+            label=f"bundle-{idx + 1}/{len(bundles)}-{lens_name}-{role_name}",
             require_verdict=True,
         )
         return idx, lens_name, out
 
-    pass_tasks = [(i, b, l_name, l_sfx) for i, b in enumerate(bundles) for l_name, l_sfx in lenses]
+    pass_tasks = [
+        (i, l_idx, b, l_name, l_sfx)
+        for i, b in enumerate(bundles)
+        for l_idx, (l_name, l_sfx) in enumerate(lenses)
+    ]
     outputs_by_bundle: dict[int, list[str]] = {i: [] for i in range(len(bundles))}
     workers = min(max_parallel, len(pass_tasks))
     if workers <= 1:
-        for i, b, l_name, l_sfx in pass_tasks:
-            _, _, out = run_pass(i, b, l_name, l_sfx)
+        for i, l_idx, b, l_name, l_sfx in pass_tasks:
+            _, _, out = run_pass(i, l_idx, b, l_name, l_sfx)
             if out:
                 outputs_by_bundle[i].append(out)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(run_pass, i, b, l_name, l_sfx) for i, b, l_name, l_sfx in pass_tasks]
+            futs = [pool.submit(run_pass, i, l_idx, b, l_name, l_sfx) for i, l_idx, b, l_name, l_sfx in pass_tasks]
             for fut in concurrent.futures.as_completed(futs):
                 i, _, out = fut.result()
                 if out:
@@ -832,7 +988,9 @@ def main() -> int:
             gql_data=meta.get("graphql"),
             scoped_rules_md=judge_rules,
         )
-        judge_models = [m for m in (primary_model, fallback_model) if m]
+        judge_models = list(
+            dict.fromkeys(m for m in (primary_model, wingman_model, fallback_model) if m)
+        )
         judge_raw = invoke_pi(
             prompt_text=judge_input,
             model_candidates=judge_models,

@@ -20,6 +20,9 @@ query($owner: String!, $name: String!, $pr: Int!) {
       baseRefName
       headRefName
       author { login }
+      labels(first: 20) {
+        nodes { name }
+      }
       closingIssuesReferences(first: 5) {
         nodes {
           number
@@ -80,6 +83,9 @@ query($owner: String!, $name: String!, $pr: Int!) {
               author { login }
               body
               createdAt
+              reactions(content: THUMBS_DOWN) {
+                totalCount
+              }
             }
           }
         }
@@ -525,11 +531,115 @@ def language_micro_rules(paths: list[str]) -> list[str]:
 
 
 def clean_body(text: str, limit: int = 1200) -> str:
-    text = re.sub(r"^<!--\s*pi(?:-review(?:\s+sha=[0-9a-fA-F]+)?)?\s*-->\s*", "", (text or "").strip())
+    text = re.sub(
+        r"^<!--\s*pi(?:(?:-review(?:\s+sha=[0-9a-fA-F]+)?)|(?:\s+id=[0-9a-fA-F]+))?\s*-->\s*",
+        "",
+        (text or "").strip(),
+    )
     text = re.sub(r"<!--\s*pi-description-(?:start|end)\s*-->", "", text).strip()
     if len(text) > limit:
         return text[:limit].rstrip() + " …[truncated]"
     return text
+
+
+DIRECT_ISSUE_KW_RE = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s*:?\s*#(\d{1,7})\b",
+    re.I,
+)
+BRANCH_ISSUE_RE = re.compile(
+    r"(?:^|/)(?:issue|gh|bug|fix|feat|chore)[/_-]#?(\d{1,7})(?:[/_-]|$)",
+    re.I,
+)
+TITLE_ISSUE_RE = re.compile(r"(?:^|\s|\()#(\d{1,7})(?:\)|\b)")
+
+
+def extract_direct_issue_numbers(title: str, head_ref: str, body: str) -> list[int]:
+    """Return ordered unique GitHub issue numbers directly targeted by title, branch, or Closes/Fixes lines."""
+    found: list[int] = []
+    for pat, src in (
+        (TITLE_ISSUE_RE, title or ""),
+        (BRANCH_ISSUE_RE, head_ref or ""),
+        (DIRECT_ISSUE_KW_RE, body or ""),
+    ):
+        for m in pat.finditer(src):
+            num = int(m.group(1))
+            if num > 0 and num not in found:
+                found.append(num)
+    return found[:5]
+
+
+def fetch_extra_direct_issues(
+    repo: str,
+    token: str,
+    pr_number: int,
+    existing_numbers: set[int],
+    candidate_numbers: list[int],
+    opener=urllib.request.urlopen,
+) -> list[dict]:
+    """Fetch open direct-target issues referenced in branch/title that GraphQL `closingIssuesReferences` missed."""
+    out: list[dict] = []
+    for num in candidate_numbers:
+        if num == pr_number or num in existing_numbers:
+            continue
+        url = f"https://api.github.com/repos/{repo}/issues/{num}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "huggy-pr-agent",
+            },
+        )
+        try:
+            with opener(req, timeout=6) as resp:
+                obj = json.loads(resp.read().decode("utf-8"))
+            if isinstance(obj, dict) and "pull_request" not in obj and obj.get("number"):
+                state = (obj.get("state") or "open").upper()
+                if state == "OPEN":
+                    out.append(
+                        {
+                            "number": int(obj["number"]),
+                            "title": obj.get("title") or "",
+                            "body": obj.get("body") or "",
+                            "state": state,
+                        }
+                    )
+        except Exception:
+            continue
+    return out
+
+
+def has_deep_review_label(data: dict) -> bool:
+    """Return True if the PR carries a `huggy:deep` or `review:deep` label."""
+    pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
+    nodes = ((pr.get("labels") or {}).get("nodes")) or []
+    for n in nodes:
+        lname = ((n or {}).get("name") or "").strip().lower()
+        if lname in ("huggy:deep", "review:deep", "pi:deep"):
+            return True
+    return False
+
+
+def extract_downvoted_feedback(data: dict) -> list[str]:
+    """Extract earlier Huggy inline findings that received a 👎 reaction so they are never repeated."""
+    pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
+    threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
+    downvoted: list[str] = []
+    for t in threads:
+        if not t:
+            continue
+        path = t.get("path") or "unknown"
+        ln = t.get("line") or t.get("originalLine") or "?"
+        for c in ((t.get("comments") or {}).get("nodes")) or []:
+            if not c:
+                continue
+            raw_body = (c.get("body") or "").strip()
+            if not raw_body.startswith("<!-- pi"):
+                continue
+            td = ((c.get("reactions") or {}).get("totalCount")) or 0
+            if td > 0:
+                downvoted.append(f"- `{path}:{ln}` (👎 downvoted by developer): {clean_body(raw_body, limit=260)}")
+    return downvoted[-15:]
 
 
 def find_last_reviewed_sha(issue_comments: list[dict]) -> str | None:
@@ -559,6 +669,8 @@ def format_pr_context(
     extra_generated_globs: list[str] | None = None,
     scoped_rules_md: str = "",
     failed_ci_logs: str = "",
+    extra_direct_issues: list[dict] | None = None,
+    blast_radius: dict[str, int] | None = None,
 ) -> str:
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
     if not pr:
@@ -584,7 +696,12 @@ def format_pr_context(
         f"- **Author:** @{author} (`{head_ref}` → `{base_ref}`)",
     ]
 
-    linked_issues = ((pr.get("closingIssuesReferences") or {}).get("nodes")) or []
+    linked_issues = list(((pr.get("closingIssuesReferences") or {}).get("nodes")) or [])
+    seen_issue_nums = {iss.get("number") for iss in linked_issues if iss and iss.get("number")}
+    for extra_iss in extra_direct_issues or []:
+        if extra_iss and extra_iss.get("number") and extra_iss["number"] not in seen_issue_nums:
+            linked_issues.append(extra_iss)
+            seen_issue_nums.add(extra_iss["number"])
     issue_lines = []
     for iss in linked_issues:
         if not iss or not iss.get("number"):
@@ -601,7 +718,8 @@ def format_pr_context(
         out += [
             "",
             "### Linked Issues (Requirements & Acceptance Criteria)",
-            "Verify that this PR satisfies all requirements and edge cases described in these linked issues:",
+            "Verify that this PR satisfies all requirements and edge cases of these direct target issues",
+            "(treat any other casual `#issue` mentions in comments/descriptions as background context only):",
             "",
             *issue_lines,
         ]
@@ -706,7 +824,9 @@ def format_pr_context(
             "",
         ]
         for f in parsed_files:
-            out.append(f"- `{f['path']}` (+{f['additions']} / -{f['deletions']})")
+            deps = (blast_radius or {}).get(f["path"], 0)
+            reach_note = f" — ⚠️ imported by {deps} files (verify callers)" if deps >= 2 else ""
+            out.append(f"- `{f['path']}` (+{f['additions']} / -{f['deletions']}){reach_note}")
 
         if sibling_files:
             out += [
@@ -813,6 +933,16 @@ def format_pr_context(
             *open_threads_md,
         ]
 
+    downvoted_md = extract_downvoted_feedback(data)
+    if downvoted_md:
+        out += [
+            "",
+            "### Downvoted Feedback (Rejected by Developer — Do NOT Repeat)",
+            "Developers reacted with 👎 to these earlier suggestions; never re-report the same idea unless a hard security/data-loss defect was introduced:",
+            "",
+            *downvoted_md,
+        ]
+
     if resolved_threads_md:
         recent_resolved = resolved_threads_md[-15:]
         out += [
@@ -911,6 +1041,7 @@ def main() -> int:
     last_sha: str | None = None
     inc_diff = ""
     failed_ci_logs = ""
+    extra_direct_issues: list[dict] = []
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -919,6 +1050,19 @@ def main() -> int:
         last_sha = find_last_reviewed_sha(issue_comments)
         inc_diff = compute_incremental_diff(last_sha) if last_sha else ""
         failed_ci_logs = fetch_failed_check_logs(repo, token, data)
+        existing_issue_nums = {
+            iss.get("number")
+            for iss in (((pr_node.get("closingIssuesReferences") or {}).get("nodes")) or [])
+            if iss and iss.get("number")
+        }
+        cand_issue_nums = extract_direct_issue_numbers(
+            pr_node.get("title") or "",
+            pr_node.get("headRefName") or "",
+            pr_node.get("body") or "",
+        )
+        extra_direct_issues = fetch_extra_direct_issues(
+            repo, token, pr, existing_issue_nums, cand_issue_nums
+        )
         md = format_pr_context(
             data,
             comment_id=comment_id,
@@ -929,6 +1073,7 @@ def main() -> int:
             extra_generated_globs=gitattributes_globs,
             scoped_rules_md=scoped_rules_md,
             failed_ci_logs=failed_ci_logs,
+            extra_direct_issues=extra_direct_issues,
         )
     except Exception as exc:
         sys.stderr.write(f"warning: could not fetch PR context ({exc}); continuing without it\n")
@@ -942,6 +1087,8 @@ def main() -> int:
                 "incremental_diff": inc_diff,
                 "gitattributes_globs": gitattributes_globs,
                 "failed_ci_logs": failed_ci_logs,
+                "extra_direct_issues": extra_direct_issues,
+                "has_deep_label": has_deep_review_label(data),
             },
             mfh,
         )

@@ -2,6 +2,15 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.9.0] - 2026-11-12
+
+### Added
+- **Lead + Wingmen Parallel Worker Pool & Blast-Radius Risk Router (`wingman_model` + `scripts/run_review.py`)**: computes deterministic reverse-import blast radius (`compute_blast_radius`) and domain criticality (`migrations/`, `auth`, `billing`, `security`, `contracts`, `api/v1`) before dispatching bundles so the highest-risk bundle and final Judge pass always run on `model` (Lead, e.g. `google-vertex/gemini-4-carbon`) while parallel sibling bundles run concurrently on `wingman_model` (e.g. `google-vertex/gemini-4-argon`), falling back to `fallback_model` only on error/timeout.
+- **Line-Shift-Resilient Thread Fingerprints & Multi-Comment Auto-Resolve (`scripts/post_review.py`)**: embeds `<!-- pi id=<hash> -->` markers so open findings survive line shifts across pushes, auto-resolves fixed threads even after developer/agent replies (while preserving open human questions), and respects `👎` downvoted suggestions across re-runs.
+- **`🤖 Prompt for AI Agents` Handoff Block**: automatically attaches a collapsible agent-ready fix prompt on `High`/`Medium` inline findings that span multiple lines/files and cannot be committed as a 1-click `suggestion`.
+- **Direct Target Issue Extraction & `huggy:deep` Label Trigger (`scripts/fetch_pr_context.py`)**: extracts direct target issues from branch names (`feat/123-...`), PR titles, and `Closes/Fixes` lines, and automatically enables `deep` dual-lens review when a PR carries the `huggy:deep` or `review:deep` label.
+- **Ponytail Senior-On-Call Discipline & Anti-Hedging Gate (`prompts/review.md`, `prompts/judge.md`)**: calibrates scale findings against expected load, prioritizes smallest fixes (preferring deletion/reusing existing repo helpers over new abstractions), respects documented `shortcut:` / `ponytail:` limits, and filters out speculative hedging and self-contradictory rambling.
+
 ## [1.8.0] - 2026-11-12
 
 ### Added

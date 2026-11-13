@@ -31,12 +31,16 @@ Score every candidate on a **0–100 confidence scale** and assign an `action`:
    rule in `AGENTS.md` / `CLAUDE.md` / path-scoped rules.
 5. **Hallucinated repository rule:** Claims a violation of `AGENTS.md` / `CLAUDE.md` when
    no such rule exists in the provided rubric.
-6. **Theoretical / ungrounded speculation:** "Might fail if X" where X is impossible given
-   the types, schema, or surrounding guards, or DoS/rate-limit complaints on internal code
-   and test-only files.
-7. **Duplicate or already resolved:** Repeats another candidate (keep the clearest/best
-   anchored one, drop the rest) or repeats an item in `Previously Resolved Threads`
-   without a new regression.
+6. **Theoretical / hedged speculation or rambling:** Uses vague hedging (*"might
+   potentially"*, *"could possibly if..."*) with no concrete reachable caller/input,
+   self-contradicts (*"wait, actually..."*), or complains about enterprise DoS/rate-limits
+   on internal scripts and test-only files.
+7. **Duplicate, resolved, or downvoted (`👎`):** Repeats another candidate (keep the
+   clearest/best anchored one, drop the rest), repeats `Previously Resolved Threads`
+   without a new regression, or repeats `Downvoted / Rejected Suggestions` (`👎`).
+8. **Documented `shortcut:` / `ponytail:` or over-engineered bloat:** Flags an explicit
+   `shortcut:` / `ponytail:` comment whose stated limit is not exceeded, or demands new
+   abstraction layers/wrappers/config where existing code is already clear and safe.
 
 ### Actions
 - **`"keep"`**: Finding passes verification (`confidence >= 65`) AND any ` ```suggestion `

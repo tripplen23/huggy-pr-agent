@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import codecs
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import urllib.request
 
 MARKER = "<!-- pi-review -->"
 MARKER_PREFIX = "<!-- pi-review"
+COMMENT_MARKER_RE = re.compile(r"^<!--\s*pi(?:\s+id=([0-9a-f]{6,16}))?\s*-->")
 HUGGY_ICON_URL = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-icon.svg"
 REVIEW_HEADING = (
     f'## <img src="{HUGGY_ICON_URL}" width="24" height="24" align="absmiddle" alt="Huggy" /> Review by Huggy'
@@ -115,6 +117,104 @@ def safe_worktree_file(worktree_root: str, rel_path: str) -> str | None:
 def disarm_suggestion(markdown: str) -> str:
     """Turn ```suggestion into a plain code fence when a range cannot be anchored."""
     return re.sub(r"^(\s*```)suggestion\b", r"\1", markdown, flags=re.M)
+
+
+def compute_finding_fingerprint(path: str, rest: str, body_text: str) -> str:
+    """Compute a line-shift-resilient 10-hex fingerprint from `(path, title_without_severity, code_identifiers)`."""
+    parts = [p.strip() for p in re.split(r"\s*·\s*", rest or "", maxsplit=1) if p.strip()]
+    title = parts[1] if (len(parts) == 2 and parts[0].capitalize() in BADGES) else (rest or "")
+    norm_title = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    backtick_ids = sorted({m.lower() for m in re.findall(r"`([A-Za-z_][A-Za-z0-9_.]*)`", body_text or "")})[:5]
+    key = f"{path}::{norm_title}::{'|'.join(backtick_ids)}"
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+
+
+def finalize_inline_comment(finding: dict, disarmed: bool = False) -> str:
+    """Build final inline comment body, appending a collapsible `Prompt for AI Agents` when no 1-click suggestion exists."""
+    comment_body = disarm_suggestion(finding["comment"]) if disarmed else finding["comment"]
+    if (
+        finding.get("severity") in ("high", "medium")
+        and not SUGGESTION_BLOCK_RE.search(comment_body)
+        and "Prompt for AI Agents" not in comment_body
+    ):
+        s_l, e_l = finding["start"], finding["end"]
+        loc_desc = f"line {s_l}" if s_l == e_l else f"lines {s_l}-{e_l}"
+        plain_issue = disarm_suggestion(finding.get("body_text") or "").strip()
+        plain_issue = re.sub(r"```.*?```", "", plain_issue, flags=re.S).strip()
+        title = finding.get("title") or finding.get("rest") or "Fix defect"
+        agent_block = (
+            "\n\n<details>\n"
+            "<summary>🤖 <b>Prompt for AI Agents</b></summary>\n\n"
+            "```text\n"
+            f"In {finding['path']} around {loc_desc} ({title}):\n"
+            f"{plain_issue}\n"
+            "Verify callers and tests, and apply the smallest safe fix (prefer deleting/reusing existing code over adding new abstractions).\n"
+            "```\n"
+            "</details>"
+        )
+        comment_body = comment_body.rstrip() + agent_block
+    return comment_body
+
+
+def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = False) -> bool:
+    """Return True if an addressed open Huggy review thread is safe to auto-resolve."""
+    if is_partial_coverage or not thread_node or thread_node.get("isResolved") or not thread_node.get("id"):
+        return False
+    c_nodes = ((thread_node.get("comments") or {}).get("nodes")) or []
+    if not c_nodes:
+        return False
+    last_c = c_nodes[-1] or {}
+    last_author = (((last_c.get("author") or {}).get("login")) or "").lower()
+    last_body = (last_c.get("body") or "").strip()
+    is_bot = (
+        not last_author
+        or last_author in ("github-actions", "github-actions[bot]")
+        or last_author.endswith("[bot]")
+        or bool(COMMENT_MARKER_RE.match(last_body))
+    )
+    if not is_bot:
+        stripped_cmd = re.sub(r"^>.*$", "", last_body, flags=re.M).strip()
+        if not re.match(r"^(?:@(?:huggy|pi)\b|/(?:fix|review|ask|improve|describe)\b)", stripped_cmd, re.I):
+            if stripped_cmd.endswith("?"):
+                return False
+    return True
+
+
+def classify_review_threads(
+    nodes: list[dict],
+    findings: list[dict],
+    is_partial_coverage: bool = False,
+) -> tuple[dict[tuple[str, int, int], list[tuple[int | None, str]]], dict[tuple[str, str], list[tuple[int | None, str]]], list[str]]:
+    """Match open Huggy threads by `(path, eff_start, end)` or `(path, fingerprint)`, and list addressed thread IDs to resolve."""
+    open_by_loc: dict[tuple[str, int, int], list[tuple[int | None, str]]] = {}
+    open_by_fp: dict[tuple[str, str], list[tuple[int | None, str]]] = {}
+    stale_thread_ids: list[str] = []
+
+    new_targets = {(f["path"], f["eff_start"], f["end"]) for f in findings if f.get("end_hunk") is not None}
+    new_fps = {(f["path"], f["fingerprint"]) for f in findings if f.get("fingerprint")}
+
+    for t in nodes or []:
+        if not t or t.get("isResolved"):
+            continue
+        c_nodes = ((t.get("comments") or {}).get("nodes")) or []
+        first_body = (c_nodes[0].get("body") or "") if c_nodes else ""
+        first_id = c_nodes[0].get("databaseId") if c_nodes else None
+        m = COMMENT_MARKER_RE.match(first_body.strip())
+        if not m:
+            continue
+        fp = m.group(1) or ""
+        t_path = t.get("path") or ""
+        line_no = t.get("line")
+        start_no = t.get("startLine") or line_no
+        loc_key = (t_path, start_no, line_no)
+        if loc_key in new_targets:
+            open_by_loc.setdefault(loc_key, []).append((first_id, first_body))
+        elif fp and (t_path, fp) in new_fps:
+            open_by_fp.setdefault((t_path, fp), []).append((first_id, first_body))
+        elif should_autoresolve_thread(t, is_partial_coverage=is_partial_coverage):
+            stale_thread_ids.append(t["id"])
+
+    return open_by_loc, open_by_fp, stale_thread_ids
 
 
 def validate_suggestion_against_file(
@@ -333,19 +433,26 @@ def parse_review_markdown(
         f["same_hunk"] = same_hunk
         f["relocated"] = relocated
         f["eff_start"] = f["start"] if (not relocated and (f["start"] == f["end"] or same_hunk)) else f["end"]
+        f["body_text"] = body_text
+        fp = compute_finding_fingerprint(f["path"], rest, body_text)
+        f["fingerprint"] = fp
+        marker_line = f"<!-- pi id={fp} -->"
 
         if body_text and rest:
             parts = [p.strip() for p in re.split(r"\s*·\s*", rest, maxsplit=1) if p.strip()]
             if len(parts) == 2 and parts[0].capitalize() in BADGES:
+                f["title"] = parts[1]
                 header = f"{BADGES[parts[0].capitalize()]} **{parts[1]}**"
             else:
+                f["title"] = rest
                 header = f"**{rest}**"
-            f["comment"] = f"<!-- pi -->\n{header}\n\n{body_text}"
+            f["comment"] = f"{marker_line}\n{header}\n\n{body_text}"
             f["summary"] = f"- {loc} ({rest}) — {summary_body}{snippet}"
         else:
+            f["title"] = rest
             combined = (rest + ("\n" + body_text if body_text else "")).strip()
             summary_combined = (rest + ("\n" + summary_body if summary_body else "")).strip()
-            f["comment"] = f"<!-- pi -->\n{combined}"
+            f["comment"] = f"{marker_line}\n{combined}"
             f["summary"] = f"- {loc} — {summary_combined}{snippet}"
 
     return verdict_line, intro_lines, findings
@@ -418,6 +525,10 @@ def main() -> int:
 
     inline_candidates, nitpick_summaries = partition_findings_by_profile(findings, review_profile)
 
+    is_partial_coverage = "incomplete (partial coverage)" in verdict_line.lower() or any(
+        "partial coverage" in ln.lower() for ln in intro_lines
+    )
+
     gql_query = """
     query($owner: String!, $name: String!, $pr: Int!) {
       repository(owner: $owner, name: $name) {
@@ -429,9 +540,9 @@ def main() -> int:
               path
               startLine
               line
-              comments(first: 2) {
+              comments(first: 10) {
                 totalCount
-                nodes { databaseId body }
+                nodes { databaseId author { login } body }
               }
             }
           }
@@ -440,8 +551,8 @@ def main() -> int:
     }
     """
     open_threads: dict[tuple[str, int, int], list[tuple[int | None, str]]] = {}
+    open_fp_threads: dict[tuple[str, str], list[tuple[int | None, str]]] = {}
     stale_thread_ids: list[str] = []
-    new_targets = {(f["path"], f["eff_start"], f["end"]) for f in findings if f["end_hunk"] is not None}
     try:
         gql = (
             api(
@@ -457,21 +568,9 @@ def main() -> int:
             .get("nodes")
             or []
         )
-        for t in nodes:
-            if not t or t.get("isResolved"):
-                continue
-            c_nodes = ((t.get("comments") or {}).get("nodes")) or []
-            first_body = (c_nodes[0].get("body") or "") if c_nodes else ""
-            first_id = c_nodes[0].get("databaseId") if c_nodes else None
-            if not first_body.startswith("<!-- pi -->"):
-                continue
-            line_no = t.get("line")
-            start_no = t.get("startLine") or line_no
-            key = (t.get("path"), start_no, line_no)
-            if key in new_targets:
-                open_threads.setdefault(key, []).append((first_id, first_body))
-            elif (t.get("comments") or {}).get("totalCount", 0) == 1 and t.get("id"):
-                stale_thread_ids.append(t["id"])
+        open_threads, open_fp_threads, stale_thread_ids = classify_review_threads(
+            nodes, inline_candidates, is_partial_coverage=is_partial_coverage
+        )
     except Exception as exc:
         sys.stderr.write(f"warning: could not query reviewThreads ({exc}); continuing without dedup\n")
 
@@ -498,12 +597,11 @@ def main() -> int:
         end_hunk = f["end_hunk"]
         same_hunk = f["same_hunk"]
         eff_start = f["eff_start"]
-        comment_body = (
-            f["comment"]
-            if (eff_start == s_l and not f.get("relocated"))
-            else disarm_suggestion(f["comment"])
-        )
-        bucket = open_threads.get((p, eff_start, e_l))
+        disarm = not (eff_start == s_l and not f.get("relocated"))
+        loc_bucket = open_threads.get((p, eff_start, e_l))
+        fp_bucket = None if loc_bucket else open_fp_threads.get((p, f.get("fingerprint") or ""))
+        bucket = loc_bucket or fp_bucket
+        comment_body = finalize_inline_comment(f, disarmed=(disarm or bool(fp_bucket)))
         if bucket:
             cid, old_body = bucket.pop(0)
             if cid and old_body.strip() != comment_body.strip():

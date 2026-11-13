@@ -777,6 +777,158 @@ const count = 1;
         self.assertIn("low", seen_cmds[2])
         self.assertIn("--no-tools", seen_cmds[2])
 
+    def test_v19_lead_wingman_blast_radius_fingerprints_and_ponytail(self):
+        import tempfile
+
+        # 1. Blast-radius scan + risk ranking puts sensitive/widely-imported bundle at idx 0 (Lead)
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "lib", "billing"), exist_ok=True)
+            os.makedirs(os.path.join(tmp, "app", "routes"), exist_ok=True)
+            os.makedirs(os.path.join(tmp, "tests"), exist_ok=True)
+            with open(os.path.join(tmp, "lib", "billing", "ledger.ts"), "w", encoding="utf-8") as fh:
+                fh.write("export function charge() { return true; }\n")
+            for k in range(4):
+                with open(os.path.join(tmp, "app", "routes", f"r{k}.ts"), "w", encoding="utf-8") as fh:
+                    fh.write("import { charge } from '../../lib/billing/ledger';\n")
+
+            blast = run_review.compute_blast_radius(
+                ["tests/ui.test.ts", "lib/billing/ledger.ts"], worktree_root=tmp
+            )
+            self.assertEqual(blast.get("lib/billing/ledger.ts"), 4)
+
+            low_bundle = [{"path": "tests/ui.test.ts", "additions": 20, "deletions": 2, "changed_lines": 22, "annotated": ""}]
+            high_bundle = [{"path": "lib/billing/ledger.ts", "additions": 10, "deletions": 2, "changed_lines": 12, "annotated": ""}]
+            ranked = run_review.rank_bundles_by_risk([low_bundle, high_bundle], blast)
+            self.assertEqual(ranked[0][0]["path"], "lib/billing/ledger.ts")
+
+        # 2. Lead + Wingman candidate selection (Lead -> Carbon, Wingman -> Argon -> DeepSeek fallback only on error)
+        role0, cands0 = run_review.select_worker_candidates(
+            0, 0, "google-vertex/gemini-4-carbon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"
+        )
+        role1, cands1 = run_review.select_worker_candidates(
+            1, 0, "google-vertex/gemini-4-carbon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"
+        )
+        self.assertEqual(role0, "lead")
+        self.assertEqual(cands0, ["google-vertex/gemini-4-carbon", "google-vertex/gemini-4-carbon", "opencode-go/deepseek-v4.1-flash"])
+        self.assertEqual(role1, "wingman")
+        self.assertEqual(cands1, ["google-vertex/gemini-4-argon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"])
+
+        # 3. Line-shift-resilient thread fingerprint + multi-comment auto-resolve + unanswered question guard
+        hunk_of = {("src/auth.ts", 50): 1}
+        rev_md = (
+            "## Review by Huggy\n\n"
+            "**Verdict:** needs changes\n\n"
+            "### `src/auth.ts:50` · High · Enforce tenant check on `loadSession`\n\n"
+            "Caller passes untrusted `orgId` into `loadSession` without checking membership.\n"
+        )
+        _, _, findings = post_review.parse_review_markdown(rev_md, hunk_of)
+        fp = findings[0]["fingerprint"]
+        self.assertRegex(findings[0]["comment"], rf"^<!-- pi id={fp} -->")
+
+        # Finding without 1-click suggestion gets collapsible `Prompt for AI Agents`
+        final_body = post_review.finalize_inline_comment(findings[0], disarmed=False)
+        self.assertIn("Prompt for AI Agents", final_body)
+
+        # Open thread at old line 30 (shifted to 50) matches by fingerprint; multi-comment fixed thread resolves;
+        # thread ending in human question stays open!
+        threads = [
+            {
+                "id": "T_SHIFTED",
+                "isResolved": False,
+                "path": "src/auth.ts",
+                "startLine": 30,
+                "line": 30,
+                "comments": {
+                    "totalCount": 1,
+                    "nodes": [{"databaseId": 501, "author": {"login": "github-actions"}, "body": f"<!-- pi id={fp} -->\nOld line 30"}],
+                },
+            },
+            {
+                "id": "T_FIXED_MULTI",
+                "isResolved": False,
+                "path": "src/other.ts",
+                "startLine": 12,
+                "line": 12,
+                "comments": {
+                    "totalCount": 3,
+                    "nodes": [
+                        {"databaseId": 502, "author": {"login": "github-actions"}, "body": "<!-- pi id=deadbeef00 -->\nOld bug"},
+                        {"databaseId": 503, "author": {"login": "alice"}, "body": "@huggy fix this"},
+                        {"databaseId": 504, "author": {"login": "github-actions"}, "body": "Pushed commit abc1234."},
+                    ],
+                },
+            },
+            {
+                "id": "T_HUMAN_QUESTION",
+                "isResolved": False,
+                "path": "src/other.ts",
+                "startLine": 25,
+                "line": 25,
+                "comments": {
+                    "totalCount": 2,
+                    "nodes": [
+                        {"databaseId": 505, "author": {"login": "github-actions"}, "body": "<!-- pi id=feedface11 -->\nCheck null"},
+                        {"databaseId": 506, "author": {"login": "alice"}, "body": "Isn't this already validated in middleware?"},
+                    ],
+                },
+            },
+        ]
+        by_loc, by_fp, stale_ids = post_review.classify_review_threads(threads, findings, is_partial_coverage=False)
+        self.assertEqual(by_loc, {})
+        self.assertIn(("src/auth.ts", fp), by_fp)
+        self.assertEqual(stale_ids, ["T_FIXED_MULTI"])
+
+        # Partial coverage never auto-resolves threads
+        _, _, partial_stale = post_review.classify_review_threads(threads, [], is_partial_coverage=True)
+        self.assertEqual(partial_stale, [])
+
+        # 4. Branch/title direct issue extraction, `huggy:deep` label, downvoted 👎 feedback, and self-retraction drop
+        self.assertEqual(
+            fetch_pr_context.extract_direct_issue_numbers("feat: billing (#88)", "fix/123-race", "Closes #456"),
+            [88, 123, 456],
+        )
+        gql_sample = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "feat: test",
+                        "body": "",
+                        "baseRefName": "main",
+                        "headRefName": "feat/123-race",
+                        "author": {"login": "alice"},
+                        "labels": {"nodes": [{"name": "huggy:deep"}]},
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "path": "src/x.ts",
+                                    "line": 9,
+                                    "comments": {
+                                        "nodes": [
+                                            {
+                                                "body": "<!-- pi id=1122334455 -->\nNoisy suggestion",
+                                                "reactions": {"totalCount": 1},
+                                            }
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        self.assertTrue(fetch_pr_context.has_deep_review_label(gql_sample))
+        downvoted = fetch_pr_context.extract_downvoted_feedback(gql_sample)
+        self.assertEqual(len(downvoted), 1)
+        self.assertIn("src/x.ts:9", downvoted[0])
+
+        retracted_md = (
+            "## Review by Huggy\n\n**Verdict:** nits\n\n"
+            "### `src/x.ts:10` · Medium · Possible null\n\n"
+            "Wait, actually looking closer, `x` is non-null. Wait, actually this is safe.\n"
+        )
+        self.assertEqual(run_review.parse_raw_candidates(retracted_md)["candidates"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
