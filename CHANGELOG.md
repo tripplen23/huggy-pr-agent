@@ -2,6 +2,12 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.11.0] - 2026-11-13
+
+### Added
+- **Multi-Act Review Animation with Coffee-Sip Loop (`assets/huggy-reviewing.svg`)**: `huggy-reviewing.svg` now runs a 24-beat (`6.72s`) discrete pixel-art loop — brisk typing on the laptop with a porcelain mug resting on the desk, followed by an occasional stoic coffee sip before returning to the keyboard.
+- **Expressive Verdict Header Icons & Colored Verdict Badges (`assets/huggy-good.svg`, `assets/huggy-serious.svg`, `scripts/post_review.py`)**: the finished `Review by Huggy` header now adapts to the outcome at a glance — cheerful smile + emerald badge on `looks good` / `nits`, stoic neutral + amber badge on `Medium` `needs changes`, and furrowed V-brows with crimson lens glint + red alert badge whenever `High` or security findings are present.
+
 ## [1.10.0] - 2026-11-13
 
 ### Added

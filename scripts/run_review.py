@@ -776,7 +776,7 @@ def assemble_review_markdown(
         sec_str = "Needs attention" if security_attention else "No issues"
     else:
         verdict = "nits"
-        sec_str = "Needs attention" if security_attention else "No issues"
+        sec_str = "No issues"
 
     out = [
         "## Review by Huggy",

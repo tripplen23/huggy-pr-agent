@@ -1025,6 +1025,34 @@ const count = 1;
             self.assertEqual(root.attrib.get("shape-rendering"), "crispEdges")
             self.assertEqual(root.attrib.get("viewBox"), "0 0 208 112")
 
+        for icon_name in ("huggy-icon.svg", "huggy-good.svg", "huggy-serious.svg"):
+            iroot = ET.parse(os.path.join(assets_dir, icon_name)).getroot()
+            self.assertEqual(iroot.attrib.get("shape-rendering"), "crispEdges")
+            self.assertEqual(iroot.attrib.get("viewBox"), "0 0 80 80")
+
+        # Verdict expression selector (`good`, `stoic`, `serious`) + badges
+        h_good, v_good = post_review.build_verdict_presentation("**Verdict:** looks good", [], [])
+        self.assertIn("huggy-good.svg", h_good)
+        self.assertIn("looks_good-16a34a", v_good)
+
+        h_med, v_med = post_review.build_verdict_presentation(
+            "**Verdict:** needs changes", [{"severity": "medium"}], []
+        )
+        self.assertIn("huggy-icon.svg", h_med)
+        self.assertIn("needs_changes-d97706", v_med)
+
+        h_nits, v_nits = post_review.build_verdict_presentation(
+            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** Needs attention"]
+        )
+        self.assertIn("huggy-good.svg", h_nits)
+        self.assertIn("nits-2563eb", v_nits)
+
+        h_high, v_high = post_review.build_verdict_presentation(
+            "**Verdict:** needs changes", [{"severity": "high"}], []
+        )
+        self.assertIn("huggy-serious.svg", h_high)
+        self.assertIn("needs_changes_%C2%B7_high-dc2626", v_high)
+
         self.assertTrue(os.path.isfile(os.path.join(assets_dir, "pi-marketplace-card.png")))
 
         # 2. Judge banner preserves sha= marker and <details> sections from review-start banner
