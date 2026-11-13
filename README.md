@@ -146,7 +146,7 @@ jobs:
 - **Interactive comment commands (`issue_comment`, `pull_request_review_comment`)** activate as soon as `.github/workflows/huggy.yml` lands on your default branch.
 - **Staying in sync with upstream updates:**
   - **Zero-click automatic updates:** Referencing `tripplen23/huggy-pr-agent@v1` automatically picks up every engine, Judge, and prompt improvement as soon as a new `v1.x` release ships.
-  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.10.0` and drop [`examples/dependabot.yml`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
+  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.11.0` and drop [`examples/dependabot.yml`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
   - **Local Pi package updates:** Run `pi update --extensions` (and `/huggy sync` inside any repo to refresh workflow templates).
 
 ---
@@ -218,7 +218,28 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
 <div align="center">
   <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-judging.svg" alt="Huggy precision Judge pass" width="196" />
   <br />
-  <sub><em>Live precision Judge indicator — verifies candidate findings against ground-truth code before anything is posted.</em></sub>
+  <sub><em>Live precision Judge indicator — verifies candidate findings before transforming into one of three verdict expressions:</em></sub>
+</div>
+
+<br />
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center" width="210">
+      <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-good.svg" alt="Huggy looks good" width="44" /><br />
+      <sub><strong><code>looks good</code> / <code>nits</code></strong></sub>
+    </td>
+    <td align="center" width="210">
+      <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-icon.svg" alt="Huggy needs changes" width="44" /><br />
+      <sub><strong><code>needs changes</code> (Medium)</strong></sub>
+    </td>
+    <td align="center" width="210">
+      <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-serious.svg" alt="Huggy high-severity alert" width="44" /><br />
+      <sub><strong><code>High</code> / Security alert</strong></sub>
+    </td>
+  </tr>
+</table>
 </div>
 
 ---

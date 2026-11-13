@@ -15,10 +15,43 @@ import urllib.request
 MARKER = "<!-- pi-review -->"
 MARKER_PREFIX = "<!-- pi-review"
 COMMENT_MARKER_RE = re.compile(r"^<!--\s*pi(?:\s+id=([0-9a-f]{6,16}))?\s*-->")
-HUGGY_ICON_URL = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-icon.svg"
+ASSET_BASE = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets"
+HUGGY_ICON_URL = f"{ASSET_BASE}/huggy-icon.svg"
+HUGGY_GOOD_ICON_URL = f"{ASSET_BASE}/huggy-good.svg"
+HUGGY_SERIOUS_ICON_URL = f"{ASSET_BASE}/huggy-serious.svg"
 REVIEW_HEADING = (
-    f'## <img src="{HUGGY_ICON_URL}" width="24" height="24" align="absmiddle" alt="Huggy" /> Review by Huggy'
+    f'## <img src="{HUGGY_ICON_URL}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
 )
+
+
+def build_verdict_presentation(
+    verdict_line: str,
+    findings: list[dict],
+    intro_lines: list[str],
+) -> tuple[str, str]:
+    """Select Huggy's expression icon (`good`, `stoic`, or `serious`) and colored Verdict badge."""
+    raw_v = re.sub(r"^\*\*Verdict:\*\*\s*", "", (verdict_line or "").strip()).lower()
+    has_high = any((f.get("severity") or "").lower() == "high" for f in findings)
+    has_sec = any("security:** needs attention" in (ln or "").lower() for ln in intro_lines)
+
+    if has_high or (has_sec and "looks good" not in raw_v):
+        icon = HUGGY_SERIOUS_ICON_URL
+        badge = "![needs changes · high](https://img.shields.io/badge/needs_changes_%C2%B7_high-dc2626)"
+    elif "looks good" in raw_v:
+        icon = HUGGY_GOOD_ICON_URL
+        badge = "![looks good](https://img.shields.io/badge/looks_good-16a34a)"
+    elif raw_v.startswith("nits"):
+        icon = HUGGY_GOOD_ICON_URL
+        badge = "![nits](https://img.shields.io/badge/nits-2563eb)"
+    elif "incomplete" in raw_v:
+        icon = HUGGY_ICON_URL
+        badge = "![incomplete (partial coverage)](https://img.shields.io/badge/incomplete_(partial_coverage)-64748b)"
+    else:
+        icon = HUGGY_ICON_URL
+        badge = "![needs changes](https://img.shields.io/badge/needs_changes-d97706)"
+
+    heading = f'## <img src="{icon}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
+    return heading, f"**Verdict:** {badge}"
 DESC_START = "<!-- pi-description-start -->"
 DESC_END = "<!-- pi-description-end -->"
 BADGES = {
@@ -658,7 +691,8 @@ def main() -> int:
 
     head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:12]
     sticky_marker = f"<!-- pi-review sha={head_sha} -->" if head_sha else MARKER
-    body_parts = [sticky_marker, REVIEW_HEADING, "", verdict_line]
+    dyn_heading, styled_verdict = build_verdict_presentation(verdict_line, findings, intro_lines)
+    body_parts = [sticky_marker, dyn_heading, "", styled_verdict]
     if intro_lines:
         body_parts += ["", "\n".join(intro_lines)]
     if not findings and not intro_lines and "looks good" not in verdict_line.lower():
