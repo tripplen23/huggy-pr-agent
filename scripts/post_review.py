@@ -34,7 +34,7 @@ def build_verdict_presentation(
     has_high = any((f.get("severity") or "").lower() == "high" for f in findings)
     has_sec = any("security:** needs attention" in (ln or "").lower() for ln in intro_lines)
 
-    if has_high or (has_sec and "looks good" not in raw_v):
+    if has_high:
         icon = HUGGY_SERIOUS_ICON_URL
         badge = "![needs changes · high](https://img.shields.io/badge/needs_changes_%C2%B7_high-dc2626)"
     elif "looks good" in raw_v:
@@ -46,6 +46,9 @@ def build_verdict_presentation(
     elif "incomplete" in raw_v:
         icon = HUGGY_ICON_URL
         badge = "![incomplete (partial coverage)](https://img.shields.io/badge/incomplete_(partial_coverage)-64748b)"
+    elif has_sec:
+        icon = HUGGY_SERIOUS_ICON_URL
+        badge = "![needs changes · security](https://img.shields.io/badge/needs_changes_%C2%B7_security-dc2626)"
     else:
         icon = HUGGY_ICON_URL
         badge = "![needs changes](https://img.shields.io/badge/needs_changes-d97706)"
