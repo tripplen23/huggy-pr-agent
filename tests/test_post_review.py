@@ -1136,7 +1136,7 @@ const count = 1;
                 self.assertTrue(stage_obj["judge_pending"])
                 self.assertEqual(stage_obj["num_candidates"], 1)
 
-                # Duplicate fingerprints on the same file stay open (`stale == []`) with `cid=None` (no cross-line overwrite)
+                # Colliding fingerprints resolve the superseded thread (`stale == ["T_DUP"]`) and repost both findings fresh
                 dup_findings = [
                     {"path": "src/app.ts", "eff_start": 10, "end": 10, "end_hunk": 1, "fingerprint": "aabbcc1234"},
                     {"path": "src/app.ts", "eff_start": 40, "end": 40, "end_hunk": 2, "fingerprint": "aabbcc1234"},
@@ -1229,6 +1229,15 @@ const count = 1;
                 self.assertIn("**Verdict:** needs changes", final_review)
                 self.assertIn("Guard null export", final_review)
                 self.assertIn("<pr_description>", final_review)
+
+                # `extract_json_object` handles nested triple-backticks inside JSON strings and leading `{prose}`
+                tricky_json = 'Note {ignore}:\n```json\n{"decisions":[{"index":0,"confidence":90,"action":"keep","reason":"fenced ```block``` ok"}]}\n```'
+                self.assertEqual(run_review.extract_json_object(tricky_json)["decisions"][0]["confidence"], 90)
+
+                # When Judge fails to produce valid decisions JSON, `--phase judge` still writes `review.md` and exits 1
+                run_review.invoke_pi = lambda **kw: "unparseable judge output"
+                self.assertEqual(run_review.main(), 1)
+                self.assertTrue(os.path.exists(os.path.join(tmp, "review.md")))
             finally:
                 run_review.invoke_pi = old_invoke
                 os.chdir(old_cwd)

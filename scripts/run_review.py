@@ -431,6 +431,7 @@ def invoke_pi(
     deadline_monotonic: float,
     label: str = "review",
     require_verdict: bool = False,
+    require_decisions_json: bool = False,
     runner=subprocess.run,
     sleeper=time.sleep,
 ) -> str | None:
@@ -510,6 +511,8 @@ def invoke_pi(
             if proc.returncode == 0 and out_str.strip():
                 if require_verdict and not re.search(r"^\*\*Verdict:\*\*\s*\S+", out_str, re.M):
                     sys.stderr.write(f"[{label}] Attempt on {candidate} omitted **Verdict:** header; retrying\n")
+                elif require_decisions_json and not isinstance((extract_json_object(out_str) or {}).get("decisions"), list):
+                    sys.stderr.write(f"[{label}] Attempt on {candidate} omitted valid decisions JSON; retrying\n")
                 else:
                     return out_str
             else:
@@ -604,17 +607,27 @@ def parse_raw_candidates(raw_md: str, worktree_root: str = ".") -> dict:
 
 
 def extract_json_object(text: str) -> dict | None:
-    """Extract the first JSON object from model output (with or without code fences)."""
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
-    raw = fenced.group(1) if fenced else text
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
+    """Extract the first valid JSON object (preferring one with a `decisions` list) using `raw_decode`."""
+    if not text:
         return None
-    try:
-        return json.loads(raw[start : end + 1])
-    except Exception:
-        return None
+    decoder = json.JSONDecoder()
+    first_dict: dict | None = None
+    pos = 0
+    while True:
+        brace = text.find("{", pos)
+        if brace == -1:
+            break
+        try:
+            obj, end_pos = decoder.raw_decode(text, brace)
+            if isinstance(obj, dict):
+                if isinstance(obj.get("decisions"), list):
+                    return obj
+                if first_dict is None:
+                    first_dict = obj
+            pos = max(brace + 1, end_pos)
+        except ValueError:
+            pos = brace + 1
+    return first_dict
 
 
 DEEP_LOGIC_LENS = (
@@ -880,6 +893,38 @@ def main() -> int:
     meta = json.loads(open(meta_path, encoding="utf-8").read()) if os.path.isfile(meta_path) else {}
     scoped_rules_md = open(scoped_rules_path, encoding="utf-8").read() if os.path.isfile(scoped_rules_path) else ""
 
+    def run_judge_verification(cands: list[dict], deadline_mono: float) -> tuple[list[dict], bool]:
+        judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
+        cand_paths = list(dict.fromkeys(c["path"] for c in cands))
+        judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md
+        judge_input = build_judge_input(
+            cands, judge_prompt, gql_data=meta.get("graphql"), scoped_rules_md=judge_rules
+        )
+        judge_models = list(
+            dict.fromkeys(m for m in (primary_model, primary_model, wingman_model, fallback_model) if m)
+        )
+        # Keep unique models while allowing one retry on primary before fallback
+        if len(judge_models) == 1:
+            judge_models = [judge_models[0], judge_models[0]]
+        judge_raw = invoke_pi(
+            prompt_text=judge_input,
+            model_candidates=judge_models,
+            thinking="low",
+            tools_arg="none",
+            rubric_path=rubric_path,
+            attempt_timeout_sec=180,
+            deadline_monotonic=deadline_mono,
+            label="judge",
+            require_decisions_json=True,
+        )
+        decisions = extract_json_object(judge_raw) if judge_raw else None
+        if decisions and isinstance(decisions.get("decisions"), list):
+            before_n = len(cands)
+            filtered = apply_judge_decisions(cands, decisions)
+            print(f"[judge] Kept {len(filtered)}/{before_n} findings.")
+            return filtered, False
+        return cands, True
+
     if phase == "judge":
         if not os.path.isfile(stage_path):
             return 0 if os.path.isfile("review.md") else 1
@@ -893,33 +938,10 @@ def main() -> int:
         notes = stage.get("notes") or []
         has_partial = bool(stage.get("has_partial"))
         num_bundles = int(stage.get("num_bundles") or 1)
-        deadline = time.monotonic() + max(60, int(stage.get("remaining_sec") or 180))
+        deadline = time.monotonic() + max(60, int(stage.get("remaining_sec") or 240))
         judge_failed = False
         if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path):
-            judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
-            cand_paths = list(dict.fromkeys(c["path"] for c in all_candidates))
-            judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md
-            judge_input = build_judge_input(
-                all_candidates, judge_prompt, gql_data=meta.get("graphql"), scoped_rules_md=judge_rules
-            )
-            judge_models = list(dict.fromkeys(m for m in (primary_model, wingman_model, fallback_model) if m))
-            judge_raw = invoke_pi(
-                prompt_text=judge_input,
-                model_candidates=judge_models,
-                thinking="low",
-                tools_arg="none",
-                rubric_path=rubric_path,
-                attempt_timeout_sec=120,
-                deadline_monotonic=deadline,
-                label="judge",
-            )
-            decisions = extract_json_object(judge_raw) if judge_raw else None
-            if decisions and isinstance(decisions.get("decisions"), list):
-                before_n = len(all_candidates)
-                all_candidates = apply_judge_decisions(all_candidates, decisions)
-                print(f"[judge] Kept {len(all_candidates)}/{before_n} findings.")
-            else:
-                judge_failed = True
+            all_candidates, judge_failed = run_judge_verification(all_candidates, deadline)
         max_findings = 8 if num_bundles == 1 else min(15, 6 + 2 * num_bundles)
         final_md = redact_secret(
             assemble_review_markdown(
@@ -1119,33 +1141,9 @@ def main() -> int:
             return 0
 
     if will_judge:
-        judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
-        cand_paths = list(dict.fromkeys(c["path"] for c in all_candidates))
-        judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md
-        judge_input = build_judge_input(
-            all_candidates,
-            judge_prompt,
-            gql_data=meta.get("graphql"),
-            scoped_rules_md=judge_rules,
-        )
-        judge_models = list(
-            dict.fromkeys(m for m in (primary_model, wingman_model, fallback_model) if m)
-        )
-        judge_raw = invoke_pi(
-            prompt_text=judge_input,
-            model_candidates=judge_models,
-            thinking="low",
-            tools_arg="none",
-            rubric_path=rubric_path,
-            attempt_timeout_sec=120,
-            deadline_monotonic=deadline,
-            label="judge",
-        )
-        if judge_raw:
-            decisions = extract_json_object(judge_raw)
-            before_n = len(all_candidates)
-            all_candidates = apply_judge_decisions(all_candidates, decisions)
-            print(f"[judge] Kept {len(all_candidates)}/{before_n} findings.")
+        all_candidates, judge_failed_all = run_judge_verification(all_candidates, deadline)
+        if judge_failed_all:
+            notes.append("> ⚠️ **Judge pass interrupted:** publishing unverified finder candidates.")
 
     final_md = assemble_review_markdown(
         candidates=all_candidates,

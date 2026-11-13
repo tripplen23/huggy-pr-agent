@@ -693,11 +693,13 @@ runs:
           fi
         fi
 
+        git_basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')
+        srv="${GITHUB_SERVER_URL:-https://github.com}"
         git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
           -c user.name=Huggy -c user.email=huggy@noreply.github.com \
           commit -q -m "huggy: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
-        git push -q --no-verify "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
-          "HEAD:refs/heads/$branch"
+        git -c "http.$srv/.extraheader=AUTHORIZATION: basic $git_basic" \
+          push -q --no-verify "$srv/$REPO.git" "HEAD:refs/heads/$branch"
 
         sha=$(git rev-parse --short HEAD)
         answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$sha" "$branch" "$reply")"

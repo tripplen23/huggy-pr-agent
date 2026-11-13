@@ -1032,6 +1032,7 @@ def compute_incremental_diff(last_sha: str) -> str:
             ["git", "-c", "core.quotePath=false", "diff", last_sha, head_sha],
             text=True,
             stderr=subprocess.DEVNULL,
+            env={**os.environ, "GIT_ATTR_SOURCE": "base"},
         )
     except Exception:
         return ""
