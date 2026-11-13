@@ -43,6 +43,10 @@ async function detectBaseRef(cwd: string, explicitBase?: string): Promise<string
 }
 
 export default function huggyExtension(pi: ExtensionAPI) {
+	pi.on("agent_settled", async (_event, ctx) => {
+		ctx.ui.setStatus("huggy", undefined);
+	});
+
 	pi.registerTool({
 		name: "huggy_prepare_diff",
 		label: "Prepare Huggy L-Numbered Diff",
@@ -133,6 +137,7 @@ print("\\n".join(out))
 				.trim();
 			const baseRef = await detectBaseRef(ctx.cwd, restBase || undefined);
 
+			ctx.ui.setStatus("huggy", `⌐■_■ Huggy ${isDeep ? "deep " : ""}reviewing (${baseRef})`);
 			ctx.ui.notify(
 				`Running Huggy ${isDeep ? "deep " : ""}review against ${baseRef}...`,
 				"info",

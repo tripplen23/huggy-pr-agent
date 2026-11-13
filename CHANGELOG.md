@@ -2,6 +2,13 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.10.0] - 2026-11-13
+
+### Added
+- **Full-Lifecycle 16-Bit Pixel-Art Live Animations (`assets/huggy-{judging,fixing,testing,thinking,blocked}.svg` + `scripts/post_progress.py`)**: live animated status cards now cover every stage of Huggy's workflow — transitioning from `huggy-reviewing.svg` to `huggy-judging.svg` during the precision Judge pass, from `huggy-fixing.svg` to `huggy-testing.svg` when `@huggy` runs `verify_cmd`, showing `huggy-thinking.svg` on `/ask` & `/describe`, and displaying `huggy-blocked.svg` on guarded-boundary refusals — before replacing themselves cleanly in-place once finished.
+- **Pi Marketplace Hero Card (`assets/pi-marketplace-card.png`)**: custom `1280x720` pixel-art gallery thumbnail for `pi.dev/packages/huggy-pr-agent`, plus animated pixel-art walkthroughs across `README.md`.
+- **Two-Phase Split Execution (`--phase find` / `--phase judge`)**: updates the PR review banner to the Judge pass between bundle discovery and verification while keeping `GH_TOKEN` strictly isolated from every Pi invocation step.
+
 ## [1.9.0] - 2026-11-12
 
 ### Added
