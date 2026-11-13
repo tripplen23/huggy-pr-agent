@@ -776,7 +776,7 @@ def assemble_review_markdown(
         sec_str = "Needs attention" if security_attention else "No issues"
     else:
         verdict = "nits"
-        sec_str = "No issues"
+        sec_str = "Needs attention" if security_attention else "No issues"
 
     out = [
         "## Review by Huggy",
@@ -1096,6 +1096,20 @@ def main() -> int:
                 sfh,
             )
         if will_judge:
+            provisional_md = redact_secret(
+                assemble_review_markdown(
+                    candidates=all_candidates,
+                    effort=max_effort,
+                    security_attention=any_sec,
+                    extra_notes=notes,
+                    pr_description=pr_desc,
+                    max_findings=8 if len(bundles) == 1 else min(15, 6 + 2 * len(bundles)),
+                    has_partial_failure=has_partial,
+                ),
+                api_key,
+            )
+            with open("review.md", "w", encoding="utf-8") as pfh:
+                pfh.write(provisional_md)
             print(f"[find] Saved {len(all_candidates)} candidate(s) for precision Judge pass.")
             return 0
 

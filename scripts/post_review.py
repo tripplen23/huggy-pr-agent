@@ -19,9 +19,13 @@ ASSET_BASE = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/ass
 HUGGY_ICON_URL = f"{ASSET_BASE}/huggy-icon.svg"
 HUGGY_GOOD_ICON_URL = f"{ASSET_BASE}/huggy-good.svg"
 HUGGY_SERIOUS_ICON_URL = f"{ASSET_BASE}/huggy-serious.svg"
-REVIEW_HEADING = (
-    f'## <img src="{HUGGY_ICON_URL}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
-)
+
+
+def format_review_heading(icon_url: str) -> str:
+    return f'## <img src="{icon_url}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
+
+
+REVIEW_HEADING = format_review_heading(HUGGY_ICON_URL)
 
 
 def build_verdict_presentation(
@@ -53,8 +57,7 @@ def build_verdict_presentation(
         icon = HUGGY_ICON_URL
         badge = "![needs changes](https://img.shields.io/badge/needs_changes-d97706)"
 
-    heading = f'## <img src="{icon}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
-    return heading, f"**Verdict:** {badge}"
+    return format_review_heading(icon), f"**Verdict:** {badge}"
 DESC_START = "<!-- pi-description-start -->"
 DESC_END = "<!-- pi-description-end -->"
 BADGES = {
@@ -235,7 +238,11 @@ def classify_review_threads(
     stale_thread_ids: list[str] = []
 
     new_targets = {(f["path"], f["eff_start"], f["end"]) for f in findings if f.get("end_hunk") is not None}
-    new_fps = {(f["path"], f["fingerprint"]) for f in findings if f.get("fingerprint")}
+    fp_counts: dict[tuple[str, str], int] = {}
+    for f in findings:
+        if f.get("fingerprint"):
+            fp_counts[(f["path"], f["fingerprint"])] = fp_counts.get((f["path"], f["fingerprint"]), 0) + 1
+    new_fps = {k for k, cnt in fp_counts.items() if cnt == 1}
 
     for t in nodes or []:
         if not t or t.get("isResolved"):
@@ -625,15 +632,27 @@ def main() -> int:
     resolved_count = 0
     for tid in stale_thread_ids:
         try:
-            api(
-                "POST",
-                "https://api.github.com/graphql",
-                {
-                    "query": "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }",
-                    "variables": {"id": tid},
-                },
+            res = (
+                api(
+                    "POST",
+                    "https://api.github.com/graphql",
+                    {
+                        "query": "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }",
+                        "variables": {"id": tid},
+                    },
+                )
+                or {}
             )
-            resolved_count += 1
+            gql_errs = res.get("errors") or []
+            is_res = (((res.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}).get("isResolved")
+            if gql_errs or not is_res:
+                err_msg = (gql_errs[0].get("message") if gql_errs and isinstance(gql_errs[0], dict) else str(gql_errs)) or "thread remained unresolved"
+                sys.stderr.write(
+                    f"warning: resolveReviewThread failed for {tid}: {err_msg} "
+                    f"(ensure the review job has 'contents: write' and 'pull-requests: write')\n"
+                )
+            else:
+                resolved_count += 1
         except Exception as exc:
             sys.stderr.write(f"warning: could not resolve stale thread {tid} ({exc})\n")
 

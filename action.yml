@@ -35,7 +35,7 @@ inputs:
     required: false
     default: "opencode-go/deepseek-v4.1-flash"
   wingman_model:
-    description: "Optional Wingman Pi model identifier (`provider/model`) for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Defaults to `model` when empty."
+    description: "Optional Wingman Pi model identifier (`provider/model`) for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Must be reachable with the same credentials configured for `model` (`api_key`/`api_key_env` or Vertex `gcp_*`). Defaults to `model` when empty."
     required: false
     default: ""
   fallback_model:

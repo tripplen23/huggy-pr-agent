@@ -2,6 +2,12 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.11.1] - 2026-11-13
+
+### Fixed
+- **Verified GraphQL `resolveReviewThread` Execution (`scripts/post_review.py` + `contents: write` workflow templates)**: inspects GraphQL `errors` and `thread.isResolved` instead of trusting HTTP 200 blindly, and updates review workflow templates to include `contents: write` (required by GitHub's `resolveReviewThread` GraphQL mutation while keeping `GH_TOKEN` excluded from Pi steps).
+- **Provisional `review.md` on `--phase find` (`scripts/run_review.py`)**: writes a provisional `review.md` before handing off to `--phase judge` so `post_review.py` never fails if the Judge step is skipped or interrupted, preserves `Security: Needs attention` on `nits` verdicts, and skips ambiguous duplicate fingerprints within the same file.
+
 ## [1.11.0] - 2026-11-13
 
 ### Added

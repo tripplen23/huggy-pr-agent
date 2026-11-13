@@ -1123,10 +1123,32 @@ const count = 1;
                 run_review.invoke_pi = fake_invoke
                 sys.argv = ["run_review.py", "--phase", "find"]
                 self.assertEqual(run_review.main(), 0)
-                self.assertFalse(os.path.exists(os.path.join(tmp, "review.md")))
+                # Provisional review.md is written even before Judge runs so an interrupted Judge never leaves review.md missing
+                self.assertTrue(os.path.exists(os.path.join(tmp, "review.md")))
                 stage_obj = run_review.json.load(open(os.path.join(tmp, "review-stage.json"), encoding="utf-8"))
                 self.assertTrue(stage_obj["judge_pending"])
                 self.assertEqual(stage_obj["num_candidates"], 1)
+
+                # Duplicate fingerprints on the same file do not match via `open_by_fp`
+                dup_findings = [
+                    {"path": "src/app.ts", "eff_start": 10, "end": 10, "end_hunk": 1, "fingerprint": "samefp1234"},
+                    {"path": "src/app.ts", "eff_start": 40, "end": 40, "end_hunk": 2, "fingerprint": "samefp1234"},
+                ]
+                _, dup_by_fp, _ = post_review.classify_review_threads(
+                    [
+                        {
+                            "id": "T_DUP",
+                            "isResolved": False,
+                            "path": "src/app.ts",
+                            "startLine": 5,
+                            "line": 5,
+                            "firstComments": {"nodes": [{"databaseId": 1, "body": "<!-- pi id=samefp1234 -->\nOld"}]},
+                            "lastComments": {"totalCount": 1, "nodes": [{"databaseId": 1, "author": {"login": "github-actions"}, "body": "Old"}]},
+                        }
+                    ],
+                    dup_findings,
+                )
+                self.assertEqual(dup_by_fp, {})
 
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)
