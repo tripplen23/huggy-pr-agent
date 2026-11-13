@@ -200,7 +200,6 @@ def rank_bundles_by_risk(
 
 def select_worker_candidates(
     bundle_idx: int,
-    lens_idx: int,
     primary_model: str,
     wingman_model: str,
     fallback_model: str,
@@ -912,12 +911,12 @@ def main() -> int:
         f"parallel={min(max_parallel, total_passes)}, budget={total_budget_sec // 60}m ({pool_desc})."
     )
 
-    def run_pass(idx: int, lens_idx: int, b_files: list[dict], lens_name: str, lens_suffix: str) -> tuple[int, str, str | None]:
+    def run_pass(idx: int, b_files: list[dict], lens_name: str, lens_suffix: str) -> tuple[int, str, str | None]:
         b_paths = {f["path"] for f in b_files}
         siblings = [f for f in parsed_files if f["path"] not in b_paths]
         b_diff_path = os.path.join(temp, f"diff-numbered-b{idx}-{lens_name}.patch")
         role_name, worker_candidates = select_worker_candidates(
-            idx, lens_idx, primary_model, wingman_model, fallback_model
+            idx, primary_model, wingman_model, fallback_model
         )
         label = f"Bundle {idx + 1}/{len(bundles)} ({role_name})" if len(bundles) > 1 else ""
         b_scoped_rules = fetch_pr_context.collect_scoped_rules(list(b_paths)) if len(bundles) > 1 else scoped_rules_md
@@ -955,21 +954,17 @@ def main() -> int:
         )
         return idx, lens_name, out
 
-    pass_tasks = [
-        (i, l_idx, b, l_name, l_sfx)
-        for i, b in enumerate(bundles)
-        for l_idx, (l_name, l_sfx) in enumerate(lenses)
-    ]
+    pass_tasks = [(i, b, l_name, l_sfx) for i, b in enumerate(bundles) for l_name, l_sfx in lenses]
     outputs_by_bundle: dict[int, list[str]] = {i: [] for i in range(len(bundles))}
     workers = min(max_parallel, len(pass_tasks))
     if workers <= 1:
-        for i, l_idx, b, l_name, l_sfx in pass_tasks:
-            _, _, out = run_pass(i, l_idx, b, l_name, l_sfx)
+        for i, b, l_name, l_sfx in pass_tasks:
+            _, _, out = run_pass(i, b, l_name, l_sfx)
             if out:
                 outputs_by_bundle[i].append(out)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(run_pass, i, l_idx, b, l_name, l_sfx) for i, l_idx, b, l_name, l_sfx in pass_tasks]
+            futs = [pool.submit(run_pass, i, b, l_name, l_sfx) for i, b, l_name, l_sfx in pass_tasks]
             for fut in concurrent.futures.as_completed(futs):
                 i, _, out = fut.result()
                 if out:

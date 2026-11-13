@@ -40,9 +40,10 @@ Score every candidate on a **0–100 confidence scale** and assign an `action`:
    issue from `Previously Resolved Threads` that remains fixed (allow concrete reintroduced
    regressions), or repeats a `Low`/preference item from `Downvoted Minor Suggestions`
    (never suppress concrete `High`/`Medium` correctness or security defects).
-8. **Documented `shortcut:` / `ponytail:` or over-engineered bloat:** Flags an explicit
-   `shortcut:` / `ponytail:` comment whose stated limit is not exceeded, or demands new
-   abstraction layers/wrappers/config where existing code is already clear and safe.
+8. **Demands for unnecessary abstraction / bloat:** Demands new abstraction layers,
+   wrappers, factories, or configuration options where the existing code is already clear,
+   minimal, and safe (note: never treat a `shortcut:` comment newly added by the PR itself
+   as an automatic pass if a concrete bug or security flaw is demonstrated).
 
 ### Actions
 - **`"keep"`**: Finding passes verification (`confidence >= 65`) AND any ` ```suggestion `

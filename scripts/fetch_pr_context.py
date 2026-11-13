@@ -19,7 +19,6 @@ query($owner: String!, $name: String!, $pr: Int!) {
       body
       baseRefName
       headRefName
-      authorAssociation
       author { login }
       labels(first: 20) {
         nodes { name }
@@ -63,7 +62,6 @@ query($owner: String!, $name: String!, $pr: Int!) {
       comments(last: 30) {
         nodes {
           databaseId
-          authorAssociation
           author { login }
           body
           createdAt
@@ -82,15 +80,11 @@ query($owner: String!, $name: String!, $pr: Int!) {
           comments(first: 10) {
             nodes {
               databaseId
-              authorAssociation
               author { login }
               body
               createdAt
-              reactions(content: THUMBS_DOWN, first: 10) {
+              reactions(content: THUMBS_DOWN) {
                 totalCount
-                nodes {
-                  user { login }
-                }
               }
             }
           }
@@ -556,7 +550,7 @@ BRANCH_ISSUE_RE = re.compile(
     r"(?:^|/|-|_)(?:issue[/_-]|gh[/_-]|#)(\d{1,7})(?:[/_-]|$)",
     re.I,
 )
-TITLE_ISSUE_RE = re.compile(r"(?:^|\s|\()#(\d{1,7})(?:\)|\b)")
+TITLE_ISSUE_RE = re.compile(r"\(#(\d{1,7})\)")
 
 
 def extract_direct_issue_numbers(title: str, head_ref: str, body: str) -> list[int]:

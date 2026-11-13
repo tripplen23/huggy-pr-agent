@@ -803,10 +803,10 @@ const count = 1;
 
         # 2. Lead + Wingman candidate selection (Lead -> Carbon, Wingman -> Argon -> DeepSeek fallback only on error)
         role0, cands0 = run_review.select_worker_candidates(
-            0, 0, "google-vertex/gemini-4-carbon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"
+            0, "google-vertex/gemini-4-carbon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"
         )
         role1, cands1 = run_review.select_worker_candidates(
-            1, 0, "google-vertex/gemini-4-carbon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"
+            1, "google-vertex/gemini-4-carbon", "google-vertex/gemini-4-argon", "opencode-go/deepseek-v4.1-flash"
         )
         self.assertEqual(role0, "lead")
         self.assertEqual(cands0, ["google-vertex/gemini-4-carbon", "google-vertex/gemini-4-carbon", "opencode-go/deepseek-v4.1-flash"])
