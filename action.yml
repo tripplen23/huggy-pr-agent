@@ -221,7 +221,7 @@ runs:
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
 
-    - name: Run Pi (review + judge)
+    - name: Run Pi (bundle finders)
       if: steps.gate_review.outputs.go == 'true'
       shell: bash
       env:
@@ -244,7 +244,39 @@ runs:
         set -euo pipefail
         # shellcheck disable=SC1091
         source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
-        python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py"
+        python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py" --phase find
+
+    - name: Update progress banner to Judge pass
+      if: steps.gate_review.outputs.go == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" judge
+
+    - name: Run Pi (precision judge)
+      if: steps.gate_review.outputs.go == 'true'
+      shell: bash
+      env:
+        PI_API_KEY: ${{ inputs.api_key }}
+        PI_API_KEY_ENV: ${{ inputs.api_key_env }}
+        PI_GCP_PROJECT: ${{ inputs.gcp_project }}
+        PI_GCP_LOCATION: ${{ inputs.gcp_location }}
+        PI_GCP_CREDENTIALS_JSON: ${{ inputs.gcp_credentials_json }}
+        PI_MODEL: ${{ inputs.model }}
+        PI_WINGMAN_MODEL: ${{ inputs.wingman_model }}
+        PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
+        PI_THINKING: ${{ inputs.thinking }}
+        PI_VERSION: ${{ inputs.pi_version }}
+        PI_JUDGE_PASS: ${{ inputs.judge_pass }}
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC1091
+        source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
+        python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py" --phase judge
 
     - name: Publish inline review and sticky summary
       if: steps.gate_review.outputs.go == 'true'
@@ -330,16 +362,17 @@ runs:
         read -r branch base cross < <(curl -fsSL -H "$auth" "$api/pulls/$PR" \
           | jq -r '"\(.head.ref) \(.base.ref) \(.head.repo.full_name != .base.repo.full_name)"')
         : "${branch:?could not read the PR branch}"
+        blocked_img='<img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-blocked.svg" width="160" alt="Huggy stopped on a guarded boundary" />'
         if [ "$cross" = "true" ] && [ "$cmd" = "fix" ]; then
           curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
-            "$api/issues/$PR/comments" -d '{"body":"I cannot push to a fork branch with this token. Run `pi` on the branch locally, or open the PR from a branch in this repo."}' > /dev/null
+            "$api/issues/$PR/comments" -d "$(jq -n --arg b "$blocked_img"$'\n\n'"I cannot push to a fork branch with this token. Run \`pi\` on the branch locally, or open the PR from a branch in this repo." '{body: $b}')" > /dev/null
           echo "go=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         if [ "$cmd" = "fix" ] && ! git ls-remote --exit-code "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "refs/heads/$branch" > /dev/null 2>&1; then
           if [ -n "$THREAD" ]; then reply_url="$api/pulls/$PR/comments/$COMMENT_ID/replies"; else reply_url="$api/issues/$PR/comments"; fi
           curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
-            "$reply_url" -d "$(jq -n --arg b "Branch \`$branch\` has been deleted on GitHub, so new commits cannot be pushed to this PR yet. Click **Restore branch** on the PR (or push \`$branch\` again), then re-run \`@huggy\`." '{body: $b}')" > /dev/null
+            "$reply_url" -d "$(jq -n --arg b "$blocked_img"$'\n\n'"Branch \`$branch\` has been deleted on GitHub, so new commits cannot be pushed to this PR yet. Click **Restore branch** on the PR (or push \`$branch\` again), then re-run \`@huggy\`." '{body: $b}')" > /dev/null
           echo "go=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -356,6 +389,8 @@ runs:
         python3 "$RUNNER_TEMP/pi-action/scripts/prepare_command.py" build-request "$RUNNER_TEMP/fix-request.md"
         if [ "$cmd" = "review" ]; then
           python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
+        else
+          CMD="$cmd" python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" command-start
         fi
 
     # Runs in its own step with neither GH_TOKEN nor PI_API_KEY in env, so
@@ -497,6 +532,19 @@ runs:
           echo "changed=false" >> "$GITHUB_OUTPUT"
         fi
 
+    - name: Update progress banner to verification test gate
+      if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != '' && steps.prepare.outputs.progress_comment_id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.issue.number || github.event.pull_request.number }}
+        PROGRESS_COMMENT_ID: ${{ steps.prepare.outputs.progress_comment_id }}
+        PROGRESS_COMMENT_KIND: ${{ steps.prepare.outputs.progress_comment_kind }}
+      run: |
+        set -euo pipefail
+        python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" command-testing
+
     - name: Verify fix
       if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != ''
       shell: bash
@@ -516,6 +564,8 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
         CMD: ${{ steps.prepare.outputs.cmd }}
+        PROGRESS_COMMENT_ID: ${{ steps.prepare.outputs.progress_comment_id }}
+        PROGRESS_COMMENT_KIND: ${{ steps.prepare.outputs.progress_comment_kind }}
         PI_REVIEW_PROFILE: ${{ inputs.review_profile }}
         GUARDED_PATHS: ${{ inputs.guarded_paths }}
       run: |
@@ -523,6 +573,7 @@ runs:
         api="https://api.github.com/repos/$REPO"
         auth="Authorization: Bearer $GH_TOKEN"
         reply=$(cat "$RUNNER_TEMP/reply.md")
+        blocked_img='<img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-blocked.svg" width="160" alt="Huggy stopped on a guarded boundary" />'
 
         if [ -n "$THREAD" ]; then
           post="$api/pulls/$PR/comments/$COMMENT_ID/replies"
@@ -530,11 +581,27 @@ runs:
           post="$api/issues/$PR/comments"
         fi
         answer() {
-          curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
-            "$post" -d "$(jq -n --arg b "$1" '{body: $b}')" > /dev/null
+          local payload
+          payload=$(jq -n --arg b "$1" '{body: $b}')
+          if [ -n "${PROGRESS_COMMENT_ID:-}" ]; then
+            local patch_url="$api/issues/comments/$PROGRESS_COMMENT_ID"
+            [ "${PROGRESS_COMMENT_KIND:-}" = "pull" ] && patch_url="$api/pulls/comments/$PROGRESS_COMMENT_ID"
+            if curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" "$patch_url" -d "$payload" > /dev/null 2>&1; then
+              return 0
+            fi
+          fi
+          curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" "$post" -d "$payload" > /dev/null
+        }
+        cleanup_progress_comment() {
+          if [ -n "${PROGRESS_COMMENT_ID:-}" ]; then
+            local del_url="$api/issues/comments/$PROGRESS_COMMENT_ID"
+            [ "${PROGRESS_COMMENT_KIND:-}" = "pull" ] && del_url="$api/pulls/comments/$PROGRESS_COMMENT_ID"
+            curl -fsSL -X DELETE -H "$auth" "$del_url" > /dev/null 2>&1 || true
+          fi
         }
 
         if [ "$CMD" = "review" ] || [ "$CMD" = "improve" ]; then
+          cleanup_progress_comment
           export HEAD_SHA="$(git rev-parse HEAD)"
           git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
           python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
@@ -581,7 +648,7 @@ runs:
           master|main|HEAD|refs/*|*/master|*/main) branch="" ;;
         esac
         if [ -z "$branch" ] || [ "$branch" = "$default" ]; then
-          answer "Refusing to push: that is the default branch. Nothing was pushed."
+          answer "$(printf '%s\n\nRefusing to push: that is the default branch. Nothing was pushed.' "$blocked_img")"
           exit 1
         fi
 
@@ -592,7 +659,7 @@ runs:
           if [ -n "$touched" ]; then
             # shellcheck disable=SC2086
             git reset -q -- $GUARDED_PATHS
-            answer "That fix wanted to change guarded build, dependency or migration files, which I do not touch ($(printf '%s' "$touched" | tr '\n' ' ')). Nothing was pushed; do it by hand."
+            answer "$(printf '%s\n\nThat fix wanted to change guarded build, dependency or migration files, which I do not touch (`%s`). Nothing was pushed; do it by hand.' "$blocked_img" "$(printf '%s' "$touched" | tr '\n' ' ')")"
             exit 1
           fi
         fi
@@ -652,6 +719,8 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
         CMD: ${{ steps.prepare.outputs.cmd }}
+        PROGRESS_COMMENT_ID: ${{ steps.prepare.outputs.progress_comment_id }}
+        PROGRESS_COMMENT_KIND: ${{ steps.prepare.outputs.progress_comment_kind }}
         RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
@@ -669,10 +738,18 @@ runs:
               "$api/issues/comments/$existing" -d "$payload" > /dev/null || true
           fi
         fi
+        fail_payload=$(jq -n --arg b "Huggy did not finish this one: a step failed, so nothing was pushed past the checks. The log says which: $RUN" '{body: $b}')
+        if [ -n "${PROGRESS_COMMENT_ID:-}" ]; then
+          patch_url="$api/issues/comments/$PROGRESS_COMMENT_ID"
+          [ "${PROGRESS_COMMENT_KIND:-}" = "pull" ] && patch_url="$api/pulls/comments/$PROGRESS_COMMENT_ID"
+          if curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" "$patch_url" -d "$fail_payload" > /dev/null 2>&1; then
+            exit 0
+          fi
+        fi
         if [ -n "$THREAD" ]; then
           post="$api/pulls/$PR/comments/$COMMENT_ID/replies"
         else
           post="$api/issues/$PR/comments"
         fi
         curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
-          "$post" -d "$(jq -n --arg b "Huggy did not finish this one: a step failed, so nothing was pushed past the checks. The log says which: $RUN" '{body: $b}')" > /dev/null
+          "$post" -d "$fail_payload" > /dev/null

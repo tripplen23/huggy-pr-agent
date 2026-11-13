@@ -1008,6 +1008,45 @@ const count = 1;
         )
         self.assertEqual(run_review.parse_raw_candidates(retracted_md)["candidates"], [])
 
+    def test_v110_live_stage_animations_and_svg_validity(self):
+        import xml.etree.ElementTree as ET
+
+        # 1. Every pixel-art SVG parses as valid XML with crispEdges and 208x112 viewBox
+        assets_dir = os.path.join(os.path.dirname(__file__), "..", "assets")
+        for svg_name in (
+            "huggy-reviewing.svg",
+            "huggy-judging.svg",
+            "huggy-fixing.svg",
+            "huggy-testing.svg",
+            "huggy-thinking.svg",
+            "huggy-blocked.svg",
+        ):
+            root = ET.parse(os.path.join(assets_dir, svg_name)).getroot()
+            self.assertEqual(root.attrib.get("shape-rendering"), "crispEdges")
+            self.assertEqual(root.attrib.get("viewBox"), "0 0 208 112")
+
+        self.assertTrue(os.path.isfile(os.path.join(assets_dir, "pi-marketplace-card.png")))
+
+        # 2. Judge banner preserves sha= marker and <details> sections from review-start banner
+        start_md = post_progress.build_progress_markdown(
+            [{"path": "src/a.ts", "additions": 5, "deletions": 1, "changed_lines": 6}],
+            num_bundles=1,
+            last_sha="cafebabe1234",
+            previous_body="<!-- pi-review sha=cafebabe1234 -->\nOld verdict",
+        )
+        judge_md = post_progress.build_judging_markdown(4, existing_body=start_md)
+        self.assertTrue(judge_md.startswith("<!-- pi-review sha=cafebabe1234 -->"))
+        self.assertIn("huggy-judging.svg", judge_md)
+        self.assertIn("4 candidate finding(s)", judge_md)
+        self.assertIn("Review scope", judge_md)
+        self.assertIn("Previous review", judge_md)
+
+        # 3. Command progress builders cover fixing -> testing, /ask thinking, and guarded blocked card
+        self.assertIn("huggy-fixing.svg", post_progress.build_command_progress_markdown("fix", "start"))
+        self.assertIn("huggy-testing.svg", post_progress.build_command_progress_markdown("fix", "testing"))
+        self.assertIn("huggy-thinking.svg", post_progress.build_command_progress_markdown("ask", "start"))
+        self.assertIn("huggy-blocked.svg", post_progress.build_blocked_markdown("Guarded path touched."))
+
 
 if __name__ == "__main__":
     unittest.main()

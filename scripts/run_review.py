@@ -833,7 +833,15 @@ def strip_pr_description_section(template_text: str) -> str:
 
 
 def main() -> int:
+    phase = "all"
+    for idx_arg, arg in enumerate(sys.argv[1:]):
+        if arg == "--phase" and idx_arg + 2 < len(sys.argv):
+            phase = sys.argv[idx_arg + 2].strip().lower()
+        elif arg.startswith("--phase="):
+            phase = arg.split("=", 1)[1].strip().lower()
+
     temp = os.environ.get("RUNNER_TEMP", "/tmp")
+    stage_path = os.path.join(temp, "review-stage.json")
     api_key = os.environ.get("PI_API_KEY") or ""
     api_key_env = os.environ.get("PI_API_KEY_ENV") or "OPENCODE_API_KEY"
     ambient_key = os.environ.get(api_key_env) or ""
@@ -869,10 +877,65 @@ def main() -> int:
     meta_path = os.path.join(temp, "pr-meta.json")
     judge_prompt_path = os.path.join(temp, "pi-action", "prompts", "judge.md")
 
-    brief_template = open(brief_template_path, encoding="utf-8").read()
-    diff_text = open(diff_path, encoding="utf-8", errors="replace").read() if os.path.isfile(diff_path) else ""
     meta = json.loads(open(meta_path, encoding="utf-8").read()) if os.path.isfile(meta_path) else {}
     scoped_rules_md = open(scoped_rules_path, encoding="utf-8").read() if os.path.isfile(scoped_rules_path) else ""
+
+    if phase == "judge":
+        if not os.path.isfile(stage_path):
+            return 0 if os.path.isfile("review.md") else 1
+        stage = json.loads(open(stage_path, encoding="utf-8").read())
+        if not stage.get("judge_pending"):
+            return 0
+        all_candidates = stage.get("all_candidates") or []
+        max_effort = int(stage.get("max_effort") or 1)
+        any_sec = bool(stage.get("any_sec"))
+        pr_desc = stage.get("pr_desc")
+        notes = stage.get("notes") or []
+        has_partial = bool(stage.get("has_partial"))
+        num_bundles = int(stage.get("num_bundles") or 1)
+        deadline = time.monotonic() + max(60, int(stage.get("remaining_sec") or 180))
+        if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path):
+            judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
+            cand_paths = list(dict.fromkeys(c["path"] for c in all_candidates))
+            judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md
+            judge_input = build_judge_input(
+                all_candidates, judge_prompt, gql_data=meta.get("graphql"), scoped_rules_md=judge_rules
+            )
+            judge_models = list(dict.fromkeys(m for m in (primary_model, wingman_model, fallback_model) if m))
+            judge_raw = invoke_pi(
+                prompt_text=judge_input,
+                model_candidates=judge_models,
+                thinking="low",
+                tools_arg="none",
+                rubric_path=rubric_path,
+                attempt_timeout_sec=120,
+                deadline_monotonic=deadline,
+                label="judge",
+            )
+            if judge_raw:
+                decisions = extract_json_object(judge_raw)
+                before_n = len(all_candidates)
+                all_candidates = apply_judge_decisions(all_candidates, decisions)
+                print(f"[judge] Kept {len(all_candidates)}/{before_n} findings.")
+        max_findings = 8 if num_bundles == 1 else min(15, 6 + 2 * num_bundles)
+        final_md = redact_secret(
+            assemble_review_markdown(
+                candidates=all_candidates,
+                effort=max_effort,
+                security_attention=any_sec,
+                extra_notes=notes,
+                pr_description=pr_desc,
+                max_findings=max_findings,
+                has_partial_failure=has_partial,
+            ),
+            api_key,
+        )
+        open("review.md", "w", encoding="utf-8").write(final_md)
+        print(f"Wrote review.md ({len(final_md)} bytes, {min(len(all_candidates), max_findings)} findings).")
+        return 0
+
+    brief_template = open(brief_template_path, encoding="utf-8").read()
+    diff_text = open(diff_path, encoding="utf-8", errors="replace").read() if os.path.isfile(diff_path) else ""
     gitattributes_globs = meta.get("gitattributes_globs") or []
     failed_ci_logs = meta.get("failed_ci_logs") or ""
     extra_direct_issues = meta.get("extra_direct_issues") or []
@@ -888,6 +951,7 @@ def main() -> int:
             "No reviewable source files changed in this diff (only lockfiles, generated files, or deletions).\n"
         )
         open("review.md", "w", encoding="utf-8").write(empty_md)
+        open(stage_path, "w", encoding="utf-8").write(json.dumps({"judge_pending": False, "num_candidates": 0}))
         print("Skipped LLM call: 0 reviewable files after filtering.")
         return 0
 
@@ -1011,7 +1075,31 @@ def main() -> int:
             f"(affected files: {missed_str})."
         )
 
-    if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path) and (deadline - time.monotonic()) > 45:
+    will_judge = bool(
+        judge_enabled and all_candidates and os.path.isfile(judge_prompt_path) and (deadline - time.monotonic()) > 45
+    )
+    if phase == "find":
+        with open(stage_path, "w", encoding="utf-8") as sfh:
+            json.dump(
+                {
+                    "judge_pending": will_judge,
+                    "num_candidates": len(all_candidates),
+                    "all_candidates": all_candidates,
+                    "max_effort": max_effort,
+                    "any_sec": any_sec,
+                    "pr_desc": pr_desc,
+                    "notes": notes,
+                    "has_partial": has_partial,
+                    "num_bundles": len(bundles),
+                    "remaining_sec": max(60, int(deadline - time.monotonic())),
+                },
+                sfh,
+            )
+        if will_judge:
+            print(f"[find] Saved {len(all_candidates)} candidate(s) for precision Judge pass.")
+            return 0
+
+    if will_judge:
         judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
         cand_paths = list(dict.fromkeys(c["path"] for c in all_candidates))
         judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md

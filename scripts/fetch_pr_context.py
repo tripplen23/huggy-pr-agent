@@ -961,7 +961,11 @@ def format_pr_context(
         if not ic:
             continue
         raw_b = (ic.get("body") or "").strip()
-        if raw_b.startswith("<!-- pi-review") or raw_b.startswith("<!-- preview-comment -->"):
+        if (
+            raw_b.startswith("<!-- pi-review")
+            or raw_b.startswith("<!-- huggy-cmd-progress -->")
+            or raw_b.startswith("<!-- preview-comment -->")
+        ):
             continue
         ic_author = ((ic.get("author") or {}).get("login")) or "user"
         convo.append(f"- **@{ic_author}**: {clean_body(raw_b, limit=600)}")

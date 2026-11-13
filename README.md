@@ -146,7 +146,7 @@ jobs:
 - **Interactive comment commands (`issue_comment`, `pull_request_review_comment`)** activate as soon as `.github/workflows/huggy.yml` lands on your default branch.
 - **Staying in sync with upstream updates:**
   - **Zero-click automatic updates:** Referencing `tripplen23/huggy-pr-agent@v1` automatically picks up every engine, Judge, and prompt improvement as soon as a new `v1.x` release ships.
-  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.9.0` and drop [`examples/dependabot.yml`](examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
+  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.10.0` and drop [`examples/dependabot.yml`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
   - **Local Pi package updates:** Run `pi update --extensions` (and `/huggy sync` inside any repo to refresh workflow templates).
 
 ---
@@ -211,13 +211,40 @@ Generic AI reviewers fail in two predictable ways: **single-call diff wrappers**
    - Small/medium PRs run in a single fast pass; massive PRs (10k+ lines / dozens of files) are deterministically grouped into semantic counterpart bundles (`foo.ts` + `contracts/foo.ts` + `foo.test.ts`) and reviewed concurrently (`review_timeout_minutes: auto`), with an optional `review_depth: deep` (`/review deep`) dual-lens pass (Logic/Callers + Security/Spec).
    - Uses review-shaped tool discipline (`--tools read,grep,find,ls --thinking high`): forms hypotheses from the diff first, batches `grep`/`find` caller discovery, then reads narrow `offset`/`limit` ranges.
 3. **Confidence-Scored (`≥ 80`) Judge Pass & Two-Channel Output (`prompts/judge.md`, `scripts/post_review.py`)**
-   - An independent tool-free **Judge pass** scores every candidate `0–100` against ground-truth file lines and the `AGENTS.md` rubric, enforcing hard exclusions (no pre-existing code, no ungrounded speculation, no hallucinated rules) so only `confidence ≥ 80` defects reach inline diff threads.
+   - Once the Lead + Wingmen workers finish scanning their risk-ranked bundles, the live banner transitions to the **Judge pass** while an independent tool-free Judge scores every candidate `0–100` against ground-truth file lines and the `AGENTS.md` rubric, enforcing hard exclusions (no pre-existing code, no hedged speculation, no hallucinated rules) so only `confidence ≥ 80` defects reach inline diff threads.
    - Under `review_profile: chill` (default), `High` and `Medium` defects are posted inline while `Low` nitpicks are collapsed inside `<details><summary>🧹 Nitpicks</summary>` in the sticky summary.
-   - Content-anchored sliding-window relocation repairs minor `1–5` line drift on `suggestion` blocks, disarms unsafe/unbalanced blocks, auto-resolves fixed threads, and replaces the live reviewing sprite with the static `Review by Huggy` summary.
+   - Content-anchored sliding-window relocation repairs minor `1–5` line drift on `suggestion` blocks, disarms unsafe/unbalanced blocks, auto-resolves fixed threads, and replaces the live animation with the static `Review by Huggy` summary.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-judging.svg" alt="Huggy precision Judge pass" width="196" />
+  <br />
+  <sub><em>Live precision Judge indicator — verifies candidate findings against ground-truth code before anything is posted.</em></sub>
+</div>
 
 ---
 
 ## Commands & Capabilities
+
+Every interactive command posts an in-place pixel-art status reply while running — transitioning automatically from **code patching** to **verification test gating** — and replaces itself cleanly with the final answer or commit SHA once finished:
+
+<div align="center">
+<table>
+  <tr>
+    <td align="center" width="240">
+      <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-fixing.svg" alt="Huggy applying a fix" width="176" /><br />
+      <sub><strong><code>@huggy &lt;fix&gt;</code></strong> · Patching code</sub>
+    </td>
+    <td align="center" width="240">
+      <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-testing.svg" alt="Huggy running verify_cmd tests" width="176" /><br />
+      <sub><strong><code>verify_cmd</code></strong> · Running test gate</sub>
+    </td>
+    <td align="center" width="240">
+      <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-thinking.svg" alt="Huggy tracing callers for /ask" width="176" /><br />
+      <sub><strong><code>/ask</code> · <code>/describe</code></strong> · Deep trace</sub>
+    </td>
+  </tr>
+</table>
+</div>
 
 Comment any of these in the **PR conversation**, inside an **inline diff review thread**, or at the bottom of a **Quote reply** (`@pi` and `/pi` aliases work identically to `@huggy` and `/huggy`):
 
@@ -271,7 +298,15 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 
 ## Security Model
 
-See [SECURITY.md](SECURITY.md) for the full threat model. Key invariants:
+<div align="center">
+  <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-blocked.svg" alt="Huggy guarded boundary alert" width="184" />
+  <br />
+  <sub><em>Guarded boundary alert — shown when a fix attempts to modify protected workflows, lockfiles, or migrations.</em></sub>
+</div>
+
+<br />
+
+See [SECURITY.md](https://github.com/tripplen23/huggy-pr-agent/blob/main/SECURITY.md) for the full threat model. Key invariants:
 
 - **Write-permission verification** — interactive `@huggy` / `@pi` commands verify true repository `write`/`maintain`/`admin` access via `/repos/{owner}/{repo}/collaborators/{username}/permission` before checking out code or running `setup_cmd` (working seamlessly even when organization memberships are Private).
 - **Base-branch rubric isolation** — `AGENTS.md` / `CLAUDE.md` and custom prompt files are read from `base` via `git show`, and Pi runs with `--no-context-files --no-approve`. A PR cannot poison its own review checklist or auto-load `.pi/` extensions.
@@ -282,6 +317,6 @@ See [SECURITY.md](SECURITY.md) for the full threat model. Key invariants:
 
 ## Contributing & License
 
-Contributions, bug reports, and prompt improvements are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for local development and testing instructions.
+Contributions, bug reports, and prompt improvements are welcome! See [CONTRIBUTING.md](https://github.com/tripplen23/huggy-pr-agent/blob/main/CONTRIBUTING.md) for local development and testing instructions.
 
 Licensed under the [MIT License](LICENSE).
