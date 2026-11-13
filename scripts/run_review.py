@@ -60,6 +60,34 @@ SELF_RETRACTION_RE = re.compile(
 )
 
 
+SOURCE_CODE_EXTS = (
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mts",
+    ".cts",
+    ".py",
+    ".go",
+    ".rs",
+    ".swift",
+    ".java",
+    ".kt",
+    ".rb",
+    ".php",
+    ".cs",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+)
+
+
+def is_production_source_path(rel_path: str) -> bool:
+    norm = rel_path.replace("\\", "/").strip("/")
+    return bool(norm) and norm.endswith(SOURCE_CODE_EXTS) and not bool(LOW_RISK_PATH_RE.search(norm))
+
+
 def import_needle_for_path(path: str) -> str | None:
     """Derive a concise import substring (`research/guards`, `post_review`) to estimate reverse-import blast radius."""
     norm = path.replace("\\", "/").strip("/")
@@ -109,7 +137,9 @@ def compute_blast_radius(paths: list[str], worktree_root: str = ".") -> dict[str
                     hits = [
                         ln.strip()
                         for ln in (proc.stdout or "").splitlines()
-                        if ln.strip() and ln.strip().replace("\\", "/") != norm_p
+                        if ln.strip()
+                        and ln.strip().replace("\\", "/") != norm_p
+                        and is_production_source_path(ln.strip())
                     ]
                     counts[p] = len(hits)
                     continue
@@ -121,8 +151,8 @@ def compute_blast_radius(paths: list[str], worktree_root: str = ".") -> dict[str
             for root, dirs, fnames in os.walk(worktree_root):
                 dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "vendor", "dist", ".next")]
                 for fn in fnames:
-                    if fn.endswith((".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".swift", ".java", ".rb")):
-                        rel = os.path.relpath(os.path.join(root, fn), worktree_root).replace("\\", "/")
+                    rel = os.path.relpath(os.path.join(root, fn), worktree_root).replace("\\", "/")
+                    if is_production_source_path(rel):
                         try:
                             with open(os.path.join(root, fn), encoding="utf-8", errors="replace") as fh:
                                 cached_files.append((rel, fh.read(120_000)))
@@ -175,9 +205,9 @@ def select_worker_candidates(
     wingman_model: str,
     fallback_model: str,
 ) -> tuple[str, list[str]]:
-    """Assign Bundle 0 (highest-risk) to `primary_model` (Lead) and remaining concurrent passes to `wingman_model`."""
+    """Assign Bundle 0 (highest-risk) across all lenses to `primary_model` (Lead), and sibling bundles to `wingman_model`."""
     clean_wingman = (wingman_model or "").strip()
-    is_lead = (bundle_idx == 0 and lens_idx == 0) or not clean_wingman or clean_wingman == primary_model
+    is_lead = (bundle_idx == 0) or not clean_wingman or clean_wingman == primary_model
     if is_lead:
         return "lead", [m for m in (primary_model, primary_model, fallback_model) if m]
     return "wingman", [m for m in (clean_wingman, clean_wingman, fallback_model) if m]
@@ -685,7 +715,15 @@ def build_judge_input(
         blocks.extend(["", "## Previously Resolved Threads on This PR", "", *resolved_summary])
     downvoted_summary = fetch_pr_context.extract_downvoted_feedback(gql_data or {})
     if downvoted_summary:
-        blocks.extend(["", "## Downvoted / Rejected Suggestions on This PR (Always Drop)", "", *downvoted_summary])
+        blocks.extend(
+            [
+                "",
+                "## Downvoted Minor Suggestions on This PR (Suppress Low/Nitpick Repeats Only)",
+                "Drop non-critical / `Low` preference repeats of these items; NEVER suppress a concrete `High`/`Medium` bug, broken caller, or security defect:",
+                "",
+                *downvoted_summary,
+            ]
+        )
     blocks.extend(["", "## Candidate Findings to Verify", ""])
     for i, c in enumerate(candidates):
         loc = f"{c['path']}:{c['start']}-{c['end']}" if c["start"] != c["end"] else f"{c['path']}:{c['start']}"

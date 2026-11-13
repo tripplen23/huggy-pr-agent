@@ -19,6 +19,7 @@ query($owner: String!, $name: String!, $pr: Int!) {
       body
       baseRefName
       headRefName
+      authorAssociation
       author { login }
       labels(first: 20) {
         nodes { name }
@@ -62,6 +63,7 @@ query($owner: String!, $name: String!, $pr: Int!) {
       comments(last: 30) {
         nodes {
           databaseId
+          authorAssociation
           author { login }
           body
           createdAt
@@ -80,11 +82,15 @@ query($owner: String!, $name: String!, $pr: Int!) {
           comments(first: 10) {
             nodes {
               databaseId
+              authorAssociation
               author { login }
               body
               createdAt
-              reactions(content: THUMBS_DOWN) {
+              reactions(content: THUMBS_DOWN, first: 10) {
                 totalCount
+                nodes {
+                  user { login }
+                }
               }
             }
           }
@@ -620,10 +626,29 @@ def has_deep_review_label(data: dict) -> bool:
     return False
 
 
+TRUSTED_ASSOCS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+
 def extract_downvoted_feedback(data: dict) -> list[str]:
-    """Extract earlier Huggy inline findings that received a 👎 reaction so they are never repeated."""
+    """Extract earlier Huggy inline findings downvoted with 👎 by trusted repo members (for nitpick suppression)."""
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
+    trusted_logins: set[str] = set()
+    pr_author = (((pr.get("author") or {}).get("login")) or "").lower()
+    if pr_author and (pr.get("authorAssociation") or "") in TRUSTED_ASSOCS:
+        trusted_logins.add(pr_author)
+    for ic in ((pr.get("comments") or {}).get("nodes")) or []:
+        if ic and (ic.get("authorAssociation") or "") in TRUSTED_ASSOCS:
+            lg = (((ic.get("author") or {}).get("login")) or "").lower()
+            if lg:
+                trusted_logins.add(lg)
     threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
+    for t in threads:
+        for c in (((t or {}).get("comments") or {}).get("nodes")) or []:
+            if c and (c.get("authorAssociation") or "") in TRUSTED_ASSOCS:
+                lg = (((c.get("author") or {}).get("login")) or "").lower()
+                if lg:
+                    trusted_logins.add(lg)
+
     downvoted: list[str] = []
     for t in threads:
         if not t:
@@ -636,9 +661,19 @@ def extract_downvoted_feedback(data: dict) -> list[str]:
             raw_body = (c.get("body") or "").strip()
             if not raw_body.startswith("<!-- pi"):
                 continue
-            td = ((c.get("reactions") or {}).get("totalCount")) or 0
-            if td > 0:
-                downvoted.append(f"- `{path}:{ln}` (👎 downvoted by developer): {clean_body(raw_body, limit=260)}")
+            rx = c.get("reactions") or {}
+            td = rx.get("totalCount") or 0
+            if td <= 0:
+                continue
+            r_nodes = rx.get("nodes")
+            if isinstance(r_nodes, list) and r_nodes:
+                reactors = {(((rn or {}).get("user") or {}).get("login") or "").lower() for rn in r_nodes}
+                reactors.discard("")
+                if trusted_logins and not (reactors & trusted_logins):
+                    continue
+                if not trusted_logins and "authorAssociation" in pr:
+                    continue
+            downvoted.append(f"- `{path}:{ln}` (👎 downvoted): {clean_body(raw_body, limit=260)}")
     return downvoted[-15:]
 
 
@@ -937,8 +972,8 @@ def format_pr_context(
     if downvoted_md:
         out += [
             "",
-            "### Downvoted Feedback (Rejected by Developer — Do NOT Repeat)",
-            "Developers reacted with 👎 to these earlier suggestions; never re-report the same idea unless a hard security/data-loss defect was introduced:",
+            "### Downvoted Feedback (Suppress Minor/Nitpick Repeats)",
+            "Trusted reviewers reacted with 👎 to these earlier suggestions; do not repeat them as minor/preference comments (still report concrete High/Medium bugs or security defects):",
             "",
             *downvoted_md,
         ]

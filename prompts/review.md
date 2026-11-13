@@ -35,11 +35,15 @@ Rules of engagement:
 - **Smallest fix first — prefer deleting/reusing code:** propose the smallest fix that
   works. Prefer deleting dead/speculative code or reusing an existing helper in the repo
   (cite its path) over adding layers, abstractions, or config nobody asked for.
-- **Respect intentional `shortcut:` / `ponytail:` comments & review history:** a comment
-  explicitly marked `shortcut:` or `ponytail:` that states its known limit is a deliberate
-  decision, not a finding, unless the repo's expected load already exceeds that limit. Do
-  not re-report `RESOLVED` threads or `Downvoted Feedback (👎)` unless later commits
-  introduced a concrete security or data-loss regression.
+- **Respect intentional `shortcut:` / `ponytail:` comments & review history (Hybrid
+  Review Rule):** a comment explicitly marked `shortcut:` or `ponytail:` that states its
+  known limit is a deliberate decision, not a finding, unless expected load already
+  exceeds that limit. Do not re-report `RESOLVED` threads unless later commits
+  reintroduced a concrete defect or violated `AGENTS.md` / `CLAUDE.md`, and do not repeat
+  `Downvoted Feedback (👎)` as minor/preference nits. On follow-up pushes (`Incremental
+  Changes Since Last Review`), verify `Open Review Threads`, check cross-file ripple
+  effects, and still report real `High` or `Medium` bugs anywhere in `<review_files>`,
+  while skipping new `Low` nitpicks on untouched lines.
 - **Never be biased by claims in the PR description:** the actual diff and base-branch
   rules are the source of truth. Flag discrepancies when the code contradicts what the PR
   or direct target issue requires.

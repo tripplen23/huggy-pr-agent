@@ -146,7 +146,7 @@ jobs:
 - **Interactive comment commands (`issue_comment`, `pull_request_review_comment`)** activate as soon as `.github/workflows/huggy.yml` lands on your default branch.
 - **Staying in sync with upstream updates:**
   - **Zero-click automatic updates:** Referencing `tripplen23/huggy-pr-agent@v1` automatically picks up every engine, Judge, and prompt improvement as soon as a new `v1.x` release ships.
-  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.8.0` and drop [`examples/dependabot.yml`](examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
+  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.9.0` and drop [`examples/dependabot.yml`](examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
   - **Local Pi package updates:** Run `pi update --extensions` (and `/huggy sync` inside any repo to refresh workflow templates).
 
 ---

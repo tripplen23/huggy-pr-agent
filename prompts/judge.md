@@ -33,11 +33,13 @@ Score every candidate on a **0–100 confidence scale** and assign an `action`:
    no such rule exists in the provided rubric.
 6. **Theoretical / hedged speculation or rambling:** Uses vague hedging (*"might
    potentially"*, *"could possibly if..."*) with no concrete reachable caller/input,
-   self-contradicts (*"wait, actually..."*), or complains about enterprise DoS/rate-limits
-   on internal scripts and test-only files.
-7. **Duplicate, resolved, or downvoted (`👎`):** Repeats another candidate (keep the
-   clearest/best anchored one, drop the rest), repeats `Previously Resolved Threads`
-   without a new regression, or repeats `Downvoted / Rejected Suggestions` (`👎`).
+   self-contradicts (*"wait, actually..."*), or raises rate-limit/scale concerns caused
+   only by workloads exceeding the repo's expected load.
+7. **Duplicate, still-fixed resolved thread, or downvoted (`👎`) nitpick:** Repeats
+   another candidate (keep the clearest/best anchored one, drop the rest), repeats an
+   issue from `Previously Resolved Threads` that remains fixed (allow concrete reintroduced
+   regressions), or repeats a `Low`/preference item from `Downvoted Minor Suggestions`
+   (never suppress concrete `High`/`Medium` correctness or security defects).
 8. **Documented `shortcut:` / `ponytail:` or over-engineered bloat:** Flags an explicit
    `shortcut:` / `ponytail:` comment whose stated limit is not exceeded, or demands new
    abstraction layers/wrappers/config where existing code is already clear and safe.

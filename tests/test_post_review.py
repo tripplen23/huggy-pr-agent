@@ -878,6 +878,58 @@ const count = 1;
         self.assertIn(("src/auth.ts", fp), by_fp)
         self.assertEqual(stale_ids, ["T_FIXED_MULTI"])
 
+        # `@huggy why is this unsafe?` AND truncated `totalCount > len(nodes)` must NOT auto-resolve!
+        self.assertFalse(
+            post_review.should_autoresolve_thread(
+                {
+                    "id": "T_ASK",
+                    "isResolved": False,
+                    "comments": {"totalCount": 2, "nodes": [{"author": {"login": "alice"}, "body": "@huggy why is this unsafe?"}]},
+                }
+            )
+        )
+        self.assertFalse(
+            post_review.should_autoresolve_thread(
+                {
+                    "id": "T_TRUNC",
+                    "isResolved": False,
+                    "comments": {"totalCount": 12, "nodes": [{"author": {"login": "github-actions"}, "body": "bot"}]},
+                }
+            )
+        )
+
+        # `prepare_command.py` strips `<!-- pi id=... -->` from earlier thread comments
+        fix_req_fp = prepare_command.build_fix_request_markdown(
+            comment_body="@huggy fix it",
+            comment_user="alice",
+            comment_id=902,
+            comment_path="src/auth.ts",
+            comment_line="50",
+            comment_diff_hunk="",
+            graphql_data={
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "nodes": [
+                                    {
+                                        "comments": {
+                                            "nodes": [
+                                                {"databaseId": 901, "author": {"login": "github-actions"}, "body": "<!-- pi id=9664980b75 -->\nClean finding text"},
+                                                {"databaseId": 902, "author": {"login": "alice"}, "body": "@huggy fix it"},
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        self.assertIn("Clean finding text", fix_req_fp)
+        self.assertNotIn("<!-- pi id=", fix_req_fp)
+
         # Partial coverage never auto-resolves threads
         _, _, partial_stale = post_review.classify_review_threads(threads, [], is_partial_coverage=True)
         self.assertEqual(partial_stale, [])

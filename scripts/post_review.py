@@ -160,9 +160,14 @@ def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = Fal
     """Return True if an addressed open Huggy review thread is safe to auto-resolve."""
     if is_partial_coverage or not thread_node or thread_node.get("isResolved") or not thread_node.get("id"):
         return False
-    c_nodes = ((thread_node.get("comments") or {}).get("nodes")) or []
+    last_conn = thread_node.get("lastComments") or thread_node.get("comments") or {}
+    c_nodes = last_conn.get("nodes") or []
     if not c_nodes:
         return False
+    if "lastComments" not in thread_node:
+        total_count = last_conn.get("totalCount") or len(c_nodes)
+        if total_count > len(c_nodes):
+            return False
     last_c = c_nodes[-1] or {}
     last_author = (((last_c.get("author") or {}).get("login")) or "").lower()
     last_body = (last_c.get("body") or "").strip()
@@ -174,9 +179,8 @@ def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = Fal
     )
     if not is_bot:
         stripped_cmd = re.sub(r"^>.*$", "", last_body, flags=re.M).strip()
-        if not re.match(r"^(?:@(?:huggy|pi)\b|/(?:fix|review|ask|improve|describe)\b)", stripped_cmd, re.I):
-            if stripped_cmd.endswith("?"):
-                return False
+        if stripped_cmd.endswith("?"):
+            return False
     return True
 
 
@@ -196,7 +200,8 @@ def classify_review_threads(
     for t in nodes or []:
         if not t or t.get("isResolved"):
             continue
-        c_nodes = ((t.get("comments") or {}).get("nodes")) or []
+        first_conn = t.get("firstComments") or t.get("comments") or {}
+        c_nodes = first_conn.get("nodes") or []
         first_body = (c_nodes[0].get("body") or "") if c_nodes else ""
         first_id = c_nodes[0].get("databaseId") if c_nodes else None
         m = COMMENT_MARKER_RE.match(first_body.strip())
@@ -540,7 +545,10 @@ def main() -> int:
               path
               startLine
               line
-              comments(first: 10) {
+              firstComments: comments(first: 1) {
+                nodes { databaseId body }
+              }
+              lastComments: comments(last: 1) {
                 totalCount
                 nodes { databaseId author { login } body }
               }
