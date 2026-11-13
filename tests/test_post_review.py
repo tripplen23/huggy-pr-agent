@@ -1173,6 +1173,38 @@ const count = 1;
                 )
                 self.assertTrue(ok_true)
 
+                # `compute_incremental_diff` uses ephemeral `-c http...extraheader` (never raw token in URL) and `+refs/pull/<pr>/head`
+                seen_git_calls: list[list[str]] = []
+                old_call = fetch_pr_context.subprocess.call
+                old_chk = fetch_pr_context.subprocess.check_output
+                try:
+                    os.environ.update({"REPO": "o/r", "GH_TOKEN": "SECRET_TOK", "PR": "42"})
+
+                    def fake_call(argv, **kw):
+                        seen_git_calls.append(list(argv))
+                        if "cat-file" in argv:
+                            return 1 if len(seen_git_calls) == 1 else 0
+                        return 0
+
+                    def fake_chk(argv, **kw):
+                        if "rev-list" in argv:
+                            return "deadbeef9999\n"
+                        if "rev-parse" in argv:
+                            return "deadbeef99990000111122223333444455556666\n"
+                        return "diff --git a/a.py b/a.py\n"
+
+                    fetch_pr_context.subprocess.call = fake_call
+                    fetch_pr_context.subprocess.check_output = fake_chk
+                    inc_out = fetch_pr_context.compute_incremental_diff("11223344556677889900aabbccddeeff00112233")
+                    self.assertIn("diff --git", inc_out)
+                    flat_args = " ".join(" ".join(c) for c in seen_git_calls)
+                    self.assertNotIn("SECRET_TOK", flat_args)
+                    self.assertIn("AUTHORIZATION: basic", flat_args)
+                    self.assertIn("+refs/pull/42/head", flat_args)
+                finally:
+                    fetch_pr_context.subprocess.call = old_call
+                    fetch_pr_context.subprocess.check_output = old_chk
+
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)
                 final_review = open(os.path.join(tmp, "review.md"), encoding="utf-8").read()

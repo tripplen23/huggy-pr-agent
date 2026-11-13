@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import codecs
 import json
 import os
@@ -996,15 +997,35 @@ def compute_incremental_diff(last_sha: str) -> str:
             repo_env = os.environ.get("REPO") or ""
             tok_env = os.environ.get("GH_TOKEN") or ""
             pr_env = os.environ.get("PR") or ""
-            remote = f"https://x-access-token:{tok_env}@github.com/{repo_env}.git" if (repo_env and tok_env) else "origin"
-            if pr_env.isdigit():
-                subprocess.call(
-                    ["git", "fetch", "-q", "--no-tags", "--depth=40", remote, f"+refs/pull/{pr_env}/head"],
-                    stderr=subprocess.DEVNULL,
-                )
-            if len(last_sha) == 40 and subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
-                subprocess.call(["git", "fetch", "-q", "--no-tags", "--depth=20", remote, last_sha], stderr=subprocess.DEVNULL)
+            remote = f"https://github.com/{repo_env}.git" if repo_env else "origin"
+            git_auth: list[str] = []
+            if tok_env:
+                b64 = base64.b64encode(f"x-access-token:{tok_env}".encode("utf-8")).decode("ascii")
+                git_auth = ["-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {b64}"]
+            try:
+                if pr_env.isdigit():
+                    subprocess.call(
+                        ["git", *git_auth, "fetch", "-q", "--no-tags", "--depth=40", remote, f"+refs/pull/{pr_env}/head"],
+                        stderr=subprocess.DEVNULL,
+                    )
+                full_sha = last_sha
+                if len(last_sha) < 40 and repo_env and tok_env and subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
+                    req = urllib.request.Request(
+                        f"https://api.github.com/repos/{repo_env}/commits/{last_sha}",
+                        headers={"Authorization": f"Bearer {tok_env}", "Accept": "application/vnd.github+json", "User-Agent": "huggy-pr-agent"},
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=6) as r_sha:
+                            full_sha = (json.loads(r_sha.read().decode("utf-8")) or {}).get("sha") or last_sha
+                    except Exception:
+                        pass
+                if len(full_sha) == 40 and subprocess.call(["git", "cat-file", "-e", f"{full_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
+                    subprocess.call(["git", *git_auth, "fetch", "-q", "--no-tags", "--depth=20", remote, full_sha], stderr=subprocess.DEVNULL)
+            finally:
+                if os.path.isfile(".git/FETCH_HEAD"):
+                    os.remove(".git/FETCH_HEAD")
         if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
+            sys.stderr.write(f"warning: incremental diff base {last_sha} unreachable; falling back to full diff\n")
             return ""
         return subprocess.check_output(
             ["git", "-c", "core.quotePath=false", "diff", last_sha, head_sha],
