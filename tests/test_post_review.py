@@ -1155,7 +1155,7 @@ const count = 1;
                     ],
                     dup_findings,
                 )
-                self.assertEqual(dup_stale, [])
+                self.assertEqual(dup_stale, ["T_DUP"])
                 self.assertEqual(dup_by_fp, {})
 
                 # GraphQL `resolveReviewThread` response validator rejects HTTP-200 FORBIDDEN errors
@@ -1173,17 +1173,31 @@ const count = 1;
                 )
                 self.assertTrue(ok_true)
 
-                # `compute_incremental_diff` uses ephemeral `-c http...extraheader` (never raw token in URL) and `+refs/pull/<pr>/head`
+                # `compute_incremental_diff` uses ephemeral `-c http...extraheader`, expands 12-hex SHAs via API, and removes `.git/FETCH_HEAD`
                 seen_git_calls: list[list[str]] = []
                 old_call = fetch_pr_context.subprocess.call
                 old_chk = fetch_pr_context.subprocess.check_output
+                old_uopen = fetch_pr_context.urllib.request.urlopen
                 try:
+                    os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
+                    open(os.path.join(tmp, ".git", "FETCH_HEAD"), "w", encoding="utf-8").write("stale")
                     os.environ.update({"REPO": "o/r", "GH_TOKEN": "SECRET_TOK", "PR": "42"})
+
+                    class FakeShaResp:
+                        def read(self):
+                            return b'{"sha":"11223344556677889900aabbccddeeff00112233"}'
+
+                        def __enter__(self):
+                            return self
+
+                        def __exit__(self, *a):
+                            return False
 
                     def fake_call(argv, **kw):
                         seen_git_calls.append(list(argv))
                         if "cat-file" in argv:
-                            return 1 if len(seen_git_calls) == 1 else 0
+                            # Return 0 only once the 40-hex SHA has been fetched
+                            return 0 if any("11223344556677889900aabbccddeeff00112233" in c for c in seen_git_calls if "fetch" in c) else 1
                         return 0
 
                     def fake_chk(argv, **kw):
@@ -1195,15 +1209,19 @@ const count = 1;
 
                     fetch_pr_context.subprocess.call = fake_call
                     fetch_pr_context.subprocess.check_output = fake_chk
-                    inc_out = fetch_pr_context.compute_incremental_diff("11223344556677889900aabbccddeeff00112233")
+                    fetch_pr_context.urllib.request.urlopen = lambda req, timeout=6: FakeShaResp()
+                    inc_out = fetch_pr_context.compute_incremental_diff("112233445566")
                     self.assertIn("diff --git", inc_out)
                     flat_args = " ".join(" ".join(c) for c in seen_git_calls)
                     self.assertNotIn("SECRET_TOK", flat_args)
                     self.assertIn("AUTHORIZATION: basic", flat_args)
                     self.assertIn("+refs/pull/42/head", flat_args)
+                    self.assertIn("11223344556677889900aabbccddeeff00112233", flat_args)
+                    self.assertFalse(os.path.exists(os.path.join(tmp, ".git", "FETCH_HEAD")))
                 finally:
                     fetch_pr_context.subprocess.call = old_call
                     fetch_pr_context.subprocess.check_output = old_chk
+                    fetch_pr_context.urllib.request.urlopen = old_uopen
 
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)

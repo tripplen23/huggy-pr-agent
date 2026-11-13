@@ -997,11 +997,12 @@ def compute_incremental_diff(last_sha: str) -> str:
             repo_env = os.environ.get("REPO") or ""
             tok_env = os.environ.get("GH_TOKEN") or ""
             pr_env = os.environ.get("PR") or ""
-            remote = f"https://github.com/{repo_env}.git" if repo_env else "origin"
+            srv_env = (os.environ.get("SERVER") or os.environ.get("GITHUB_SERVER_URL") or "https://github.com").rstrip("/")
+            remote = f"{srv_env}/{repo_env}.git" if repo_env else "origin"
             git_auth: list[str] = []
             if tok_env:
                 b64 = base64.b64encode(f"x-access-token:{tok_env}".encode("utf-8")).decode("ascii")
-                git_auth = ["-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {b64}"]
+                git_auth = ["-c", f"http.{srv_env}/.extraheader=AUTHORIZATION: basic {b64}"]
             try:
                 if pr_env.isdigit():
                     subprocess.call(

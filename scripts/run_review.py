@@ -894,6 +894,7 @@ def main() -> int:
         has_partial = bool(stage.get("has_partial"))
         num_bundles = int(stage.get("num_bundles") or 1)
         deadline = time.monotonic() + max(60, int(stage.get("remaining_sec") or 180))
+        judge_failed = False
         if judge_enabled and all_candidates and os.path.isfile(judge_prompt_path):
             judge_prompt = open(judge_prompt_path, encoding="utf-8").read()
             cand_paths = list(dict.fromkeys(c["path"] for c in all_candidates))
@@ -912,11 +913,13 @@ def main() -> int:
                 deadline_monotonic=deadline,
                 label="judge",
             )
-            if judge_raw:
-                decisions = extract_json_object(judge_raw)
+            decisions = extract_json_object(judge_raw) if judge_raw else None
+            if decisions and isinstance(decisions.get("decisions"), list):
                 before_n = len(all_candidates)
                 all_candidates = apply_judge_decisions(all_candidates, decisions)
                 print(f"[judge] Kept {len(all_candidates)}/{before_n} findings.")
+            else:
+                judge_failed = True
         max_findings = 8 if num_bundles == 1 else min(15, 6 + 2 * num_bundles)
         final_md = redact_secret(
             assemble_review_markdown(
@@ -930,9 +933,10 @@ def main() -> int:
             ),
             api_key,
         )
-        open("review.md", "w", encoding="utf-8").write(final_md)
+        with open("review.md", "w", encoding="utf-8") as rfh:
+            rfh.write(final_md)
         print(f"Wrote review.md ({len(final_md)} bytes, {min(len(all_candidates), max_findings)} findings).")
-        return 0
+        return 1 if judge_failed else 0
 
     brief_template = open(brief_template_path, encoding="utf-8").read()
     diff_text = open(diff_path, encoding="utf-8", errors="replace").read() if os.path.isfile(diff_path) else ""

@@ -276,9 +276,6 @@ def classify_review_threads(
             open_by_loc.setdefault(loc_key, []).append((first_id, first_body))
         elif fp and (t_path, fp) in new_fps:
             open_by_fp.setdefault((t_path, fp), []).append((first_id, first_body))
-        elif fp and (t_path, fp) in fp_counts:
-            # Ambiguous colliding fingerprint: neither auto-resolve old thread nor swallow new inline comments
-            continue
         elif should_autoresolve_thread(t, is_partial_coverage=is_partial_coverage):
             stale_thread_ids.append(t["id"])
 

@@ -15,7 +15,7 @@
 3. **Step-Scoped Secrets & Non-Persisted Checkout Credentials**
    - `github_token` (`GH_TOKEN`) is only passed to the checkout/fetch and publish steps — never to the `Run Pi` or `Verify fix` steps.
    - **GitHub GraphQL `GITHUB_TOKEN` quirk (`orgs/community#20469`):** GitHub's GraphQL `resolveReviewThread` mutation rejects `GITHUB_TOKEN` with `FORBIDDEN: Resource not accessible by integration` unless **both** `contents: write` and `pull-requests: write` are granted on the workflow job (verified empirically in CI). To keep `Run Pi` completely credential-free even when the job declares `contents: write`, `action.yml` sets `persist-credentials: false` on `actions/checkout@v4`, passes ephemeral `-c http.https://github.com/.extraheader=...` flags to setup `git fetch` calls (so raw tokens never enter `.git/config` or `.git/FETCH_HEAD`), deletes `.git/FETCH_HEAD`, and excludes `GH_TOKEN` from every `Run Pi` step.
-   - `api_key` and `gcp_credentials_json` are only passed to the `Run Pi` steps, shredded on exit, and redacted from all published comments.
+   - `api_key` and `gcp_credentials_json` are only passed to the `Run Pi` steps and redacted from all published comments; the temporary GCP key file is removed by an `EXIT` trap.
    - Use a restricted, monthly-capped model API key (e.g. an OpenCode Go key with `Models: Request` permission only).
 4. **Git Hook & Guarded Path Enforcement**
    - Before staging/committing in the publish step, `.git/hooks`, `core.fsmonitor`, and `core.hooksPath` are removed, `git commit` runs with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`, and `git push` runs with `--no-verify`.
