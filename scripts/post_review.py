@@ -41,6 +41,10 @@ def build_verdict_presentation(
     if has_high:
         icon = HUGGY_SERIOUS_ICON_URL
         badge = "![needs changes · high](https://img.shields.io/badge/needs_changes_%C2%B7_high-dc2626)"
+    elif has_sec and "looks good" not in raw_v:
+        icon = HUGGY_SERIOUS_ICON_URL
+        lbl = "nits" if raw_v.startswith("nits") else "needs_changes"
+        badge = f"![{lbl.replace('_', ' ')} · security](https://img.shields.io/badge/{lbl}_%C2%B7_security-dc2626)"
     elif "looks good" in raw_v:
         icon = HUGGY_GOOD_ICON_URL
         badge = "![looks good](https://img.shields.io/badge/looks_good-16a34a)"
@@ -50,9 +54,6 @@ def build_verdict_presentation(
     elif "incomplete" in raw_v:
         icon = HUGGY_ICON_URL
         badge = "![incomplete (partial coverage)](https://img.shields.io/badge/incomplete_(partial_coverage)-64748b)"
-    elif has_sec:
-        icon = HUGGY_SERIOUS_ICON_URL
-        badge = "![needs changes · security](https://img.shields.io/badge/needs_changes_%C2%B7_security-dc2626)"
     else:
         icon = HUGGY_ICON_URL
         badge = "![needs changes](https://img.shields.io/badge/needs_changes-d97706)"
@@ -264,8 +265,8 @@ def classify_review_threads(
         elif fp and (t_path, fp) in new_fps:
             open_by_fp.setdefault((t_path, fp), []).append((first_id, first_body))
         elif fp and (t_path, fp) in fp_counts:
-            # Ambiguous colliding fingerprint: keep thread open without risking cross-line PATCH overwrite
-            open_by_fp.setdefault((t_path, fp), []).append((None, first_body))
+            # Ambiguous colliding fingerprint: neither auto-resolve old thread nor swallow new inline comments
+            continue
         elif should_autoresolve_thread(t, is_partial_coverage=is_partial_coverage):
             stale_thread_ids.append(t["id"])
 
@@ -651,8 +652,7 @@ def main() -> int:
             if gql_errs or not is_res:
                 err_msg = (gql_errs[0].get("message") if gql_errs and isinstance(gql_errs[0], dict) else str(gql_errs)) or "thread remained unresolved"
                 sys.stderr.write(
-                    f"warning: resolveReviewThread failed for {tid}: {err_msg} "
-                    f"(ensure the review job has 'contents: write' and 'pull-requests: write')\n"
+                    f"warning: resolveReviewThread failed for {tid}: {err_msg}\n"
                 )
             else:
                 resolved_count += 1

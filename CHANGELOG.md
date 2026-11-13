@@ -5,8 +5,9 @@ All notable changes to `huggy-pr-agent` are documented in this file.
 ## [1.11.1] - 2026-11-13
 
 ### Fixed
-- **Verified GraphQL `resolveReviewThread` Execution (`scripts/post_review.py` + `contents: write` workflow templates)**: inspects GraphQL `errors` and `thread.isResolved` instead of trusting HTTP 200 blindly, and updates review workflow templates to include `contents: write` (required by GitHub's `resolveReviewThread` GraphQL mutation while keeping `GH_TOKEN` excluded from Pi steps).
-- **Provisional `review.md` on `--phase find` (`scripts/run_review.py`)**: writes a provisional `review.md` before handing off to `--phase judge` so `post_review.py` never fails if the Judge step is skipped or interrupted, preserves `Security: Needs attention` on `nits` verdicts, and skips ambiguous duplicate fingerprints within the same file.
+- **Verified GraphQL `resolveReviewThread` & Checkout Credential Scrubbing (`scripts/post_review.py`, `action.yml`)**: inspects GraphQL `errors` and `thread.isResolved` before counting threads as resolved, and scrubs checkout auth headers from `.git/config` before running Pi in read-only review jobs.
+- **Provisional `review.md` on `--phase find` (`scripts/run_review.py`)**: writes a provisional `review.md` before handing off to `--phase judge` so `post_review.py` never fails if the Judge step is skipped or interrupted, and preserves `Security: Needs attention` on `nits` verdicts.
+- **Ambiguous Fingerprint & Security Badge Handling (`scripts/post_review.py`)**: avoids cross-line overwrites or premature thread resolution when two findings in the same file share a fingerprint, and displays a distinct `nits · security` alert badge when security attention is flagged without High-severity findings.
 
 ## [1.11.0] - 2026-11-13
 

@@ -435,6 +435,7 @@ const count = 1;
         )
         # High was dropped, only Low remains -> Verdict automatically adjusts to `nits`!
         self.assertIn("**Verdict:** nits", final_md)
+        self.assertIn("**Security:** Needs attention", final_md)
 
         # If all findings are dropped -> Verdict automatically adjusts to `looks good`!
         clean_md = run_review.assemble_review_markdown(
@@ -1042,10 +1043,16 @@ const count = 1;
         self.assertIn("needs_changes-d97706", v_med)
 
         h_nits, v_nits = post_review.build_verdict_presentation(
-            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** Needs attention"]
+            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** No issues"]
         )
         self.assertIn("huggy-good.svg", h_nits)
         self.assertIn("nits-2563eb", v_nits)
+
+        h_nits_sec, v_nits_sec = post_review.build_verdict_presentation(
+            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** Needs attention"]
+        )
+        self.assertIn("huggy-serious.svg", h_nits_sec)
+        self.assertIn("nits_%C2%B7_security-dc2626", v_nits_sec)
 
         h_high, v_high = post_review.build_verdict_presentation(
             "**Verdict:** needs changes", [{"severity": "high"}], []
@@ -1149,7 +1156,7 @@ const count = 1;
                     dup_findings,
                 )
                 self.assertEqual(dup_stale, [])
-                self.assertIsNone(dup_by_fp[("src/app.ts", "aabbcc1234")][0][0])
+                self.assertEqual(dup_by_fp, {})
 
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)

@@ -1075,6 +1075,7 @@ def main() -> int:
             f"(affected files: {missed_str})."
         )
 
+    max_findings = 8 if len(bundles) == 1 else min(15, 6 + 2 * len(bundles))
     will_judge = bool(
         judge_enabled and all_candidates and os.path.isfile(judge_prompt_path) and (deadline - time.monotonic()) > 45
     )
@@ -1103,7 +1104,7 @@ def main() -> int:
                     security_attention=any_sec,
                     extra_notes=notes,
                     pr_description=pr_desc,
-                    max_findings=8 if len(bundles) == 1 else min(15, 6 + 2 * len(bundles)),
+                    max_findings=max_findings,
                     has_partial_failure=has_partial,
                 ),
                 api_key,
@@ -1142,7 +1143,6 @@ def main() -> int:
             all_candidates = apply_judge_decisions(all_candidates, decisions)
             print(f"[judge] Kept {len(all_candidates)}/{before_n} findings.")
 
-    max_findings = 8 if len(bundles) == 1 else min(15, 6 + 2 * len(bundles))
     final_md = assemble_review_markdown(
         candidates=all_candidates,
         effort=max_effort,

@@ -220,6 +220,8 @@ runs:
         git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
+        # Scrub checkout token from .git/config before the Pi step runs
+        git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
 
     - name: Run Pi (bundle finders)
       if: steps.gate_review.outputs.go == 'true'
