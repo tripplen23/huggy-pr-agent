@@ -1129,12 +1129,12 @@ const count = 1;
                 self.assertTrue(stage_obj["judge_pending"])
                 self.assertEqual(stage_obj["num_candidates"], 1)
 
-                # Duplicate fingerprints on the same file do not match via `open_by_fp`
+                # Duplicate fingerprints on the same file stay open (`stale == []`) with `cid=None` (no cross-line overwrite)
                 dup_findings = [
-                    {"path": "src/app.ts", "eff_start": 10, "end": 10, "end_hunk": 1, "fingerprint": "samefp1234"},
-                    {"path": "src/app.ts", "eff_start": 40, "end": 40, "end_hunk": 2, "fingerprint": "samefp1234"},
+                    {"path": "src/app.ts", "eff_start": 10, "end": 10, "end_hunk": 1, "fingerprint": "aabbcc1234"},
+                    {"path": "src/app.ts", "eff_start": 40, "end": 40, "end_hunk": 2, "fingerprint": "aabbcc1234"},
                 ]
-                _, dup_by_fp, _ = post_review.classify_review_threads(
+                _, dup_by_fp, dup_stale = post_review.classify_review_threads(
                     [
                         {
                             "id": "T_DUP",
@@ -1142,13 +1142,14 @@ const count = 1;
                             "path": "src/app.ts",
                             "startLine": 5,
                             "line": 5,
-                            "firstComments": {"nodes": [{"databaseId": 1, "body": "<!-- pi id=samefp1234 -->\nOld"}]},
+                            "firstComments": {"nodes": [{"databaseId": 1, "body": "<!-- pi id=aabbcc1234 -->\nOld"}]},
                             "lastComments": {"totalCount": 1, "nodes": [{"databaseId": 1, "author": {"login": "github-actions"}, "body": "Old"}]},
                         }
                     ],
                     dup_findings,
                 )
-                self.assertEqual(dup_by_fp, {})
+                self.assertEqual(dup_stale, [])
+                self.assertIsNone(dup_by_fp[("src/app.ts", "aabbcc1234")][0][0])
 
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)

@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-      - uses: ./
+      - uses: tripplen23/huggy-pr-agent@v1
         with:
           mode: review
           api_key: ${{ secrets.OPENCODE_GO_KEY }}
