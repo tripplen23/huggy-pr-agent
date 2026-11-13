@@ -170,7 +170,7 @@ def build_fix_request_markdown(
                 parts.append("")
                 for c in earlier[-5:]:
                     author = ((c.get("author") or {}).get("login")) or "reviewer"
-                    body = (c.get("body") or "").replace("<!-- pi -->", "").strip()
+                    body = re.sub(r"^<!--\s*pi(?:\s+id=[0-9a-fA-F]+)?\s*-->\s*", "", c.get("body") or "").strip()
                     parts.append(f"**@{author}:**")
                     parts.append(body)
                     parts.append("")

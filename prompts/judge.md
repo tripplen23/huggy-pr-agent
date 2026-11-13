@@ -31,12 +31,19 @@ Score every candidate on a **0–100 confidence scale** and assign an `action`:
    rule in `AGENTS.md` / `CLAUDE.md` / path-scoped rules.
 5. **Hallucinated repository rule:** Claims a violation of `AGENTS.md` / `CLAUDE.md` when
    no such rule exists in the provided rubric.
-6. **Theoretical / ungrounded speculation:** "Might fail if X" where X is impossible given
-   the types, schema, or surrounding guards, or DoS/rate-limit complaints on internal code
-   and test-only files.
-7. **Duplicate or already resolved:** Repeats another candidate (keep the clearest/best
-   anchored one, drop the rest) or repeats an item in `Previously Resolved Threads`
-   without a new regression.
+6. **Theoretical / hedged speculation or rambling:** Uses vague hedging (*"might
+   potentially"*, *"could possibly if..."*) with no concrete reachable caller/input,
+   self-contradicts (*"wait, actually..."*), or raises rate-limit/scale concerns caused
+   only by workloads exceeding the repo's expected load.
+7. **Duplicate, still-fixed resolved thread, or downvoted (`👎`) nitpick:** Repeats
+   another candidate (keep the clearest/best anchored one, drop the rest), repeats an
+   issue from `Previously Resolved Threads` that remains fixed (allow concrete reintroduced
+   regressions), or repeats a `Low`/preference item from `Downvoted Minor Suggestions`
+   (never suppress concrete `High`/`Medium` correctness or security defects).
+8. **Demands for unnecessary abstraction / bloat:** Demands new abstraction layers,
+   wrappers, factories, or configuration options where the existing code is already clear,
+   minimal, and safe (note: never treat a `shortcut:` comment newly added by the PR itself
+   as an automatic pass if a concrete bug or security flaw is demonstrated).
 
 ### Actions
 - **`"keep"`**: Finding passes verification (`confidence >= 65`) AND any ` ```suggestion `

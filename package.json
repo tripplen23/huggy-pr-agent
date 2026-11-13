@@ -1,12 +1,12 @@
 {
   "name": "huggy-pr-agent",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Repository-aware PR code reviews, 1-click commit suggestions, and test-gated @huggy auto-fixes — as a GitHub Action, Pi Package, and cross-harness Agent Skill.",
   "license": "MIT",
   "author": "Binh Duc Nguyen",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tripplen23/huggy-pr-agent.git"
+    "url": "git+https://github.com/tripplen23/huggy-pr-agent.git"
   },
   "homepage": "https://github.com/tripplen23/huggy-pr-agent#readme",
   "bugs": {

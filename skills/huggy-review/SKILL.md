@@ -25,7 +25,9 @@ Portable across **Pi**, **Claude Code**, **Codex**, **Cursor**, and **OpenCode**
    - **Turn 1 (Batch Discovery):** Batch all `grep` / `find` lookups for modified functions, types, routes, and config keys in a single parallel wave.
    - **Turn 2 (Batch Narrow Reads):** Batch narrow file reads (`offset` + `limit`) around the discovered call sites.
 
-3. **Precision Gate (`0–100` Confidence) & Two-Channel Output**
-   - Drop (`< 65`): pre-existing untouched code, formatter/linter style opinions, ungrounded "what-ifs", or rules not actually written in `AGENTS.md` / `CLAUDE.md`.
+3. **Precision Gate (`0–100` Confidence), Ponytail Discipline & Two-Channel Output**
+   - Review in strict priority order: **correct, safe, holds under expected load, tested, fast, lean**.
+   - Require a concrete trigger case ("no case, no finding"); propose the smallest fix (prefer deleting code or reusing an existing helper in the repo); respect documented `shortcut:` / `ponytail:` limits unless expected load already exceeds them.
+   - Drop (`< 65`): pre-existing untouched code, formatter/linter style opinions, hedged speculation, or rules not actually written in `AGENTS.md` / `CLAUDE.md`.
    - **Actionable Findings (`confidence >= 80`, `High` / `Medium`):** List first with exact `path:start-end`, concrete failure scenario, and drop-in fix.
    - **Nitpicks (`confidence 65–79`, `Low`):** Group separately in a brief **Nitpicks** section at the end so main findings stay noise-free.

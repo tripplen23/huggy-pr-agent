@@ -146,7 +146,7 @@ jobs:
 - **Interactive comment commands (`issue_comment`, `pull_request_review_comment`)** activate as soon as `.github/workflows/huggy.yml` lands on your default branch.
 - **Staying in sync with upstream updates:**
   - **Zero-click automatic updates:** Referencing `tripplen23/huggy-pr-agent@v1` automatically picks up every engine, Judge, and prompt improvement as soon as a new `v1.x` release ships.
-  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.8.0` and drop [`examples/dependabot.yml`](examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
+  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.9.0` and drop [`examples/dependabot.yml`](examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
   - **Local Pi package updates:** Run `pi update --extensions` (and `/huggy sync` inside any repo to refresh workflow templates).
 
 ---
@@ -241,8 +241,9 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `gcp_project` | `""` | Google Cloud project ID when using `google-vertex/*` models (auto-detected from `gcp_credentials_json` if omitted). |
 | `gcp_location` | `global` | Google Cloud region or `global` when using `google-vertex/*` models. |
 | `gcp_credentials_json` | `""` | Google Cloud Service Account JSON key for `google-vertex/*` models (omit when using Workload Identity Federation). |
-| `model` | `opencode-go/deepseek-v4.1-flash` | Primary model ID passed to `pi --model`. |
-| `fallback_model` | `opencode-go/glm-5.3-flash` | Fallback model tried automatically when `model` is overloaded (`429`/`5xx`/timeout) — supports cross-provider failover. |
+| `model` | `opencode-go/deepseek-v4.1-flash` | Primary / Lead model ID passed to `pi --model` (reviews the highest-risk bundle and runs the Judge pass). |
+| `wingman_model` | `""` | Optional Wingman model ID for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Defaults to `model` when empty. |
+| `fallback_model` | `opencode-go/glm-5.3-flash` | Emergency fallback model tried only after `model` or `wingman_model` fails (error, non-zero exit, missing verdict, or timeout) — supports cross-provider failover. |
 | `thinking` | `high` | Thinking depth (`off`, `minimal`, `low`, `medium`, `high`). |
 | `review_tools` | `read,grep,find,ls` | Built-in Pi tools enabled during read-only PR reviews. |
 | `review_timeout_minutes` | `auto` | Review timeout budget in minutes, or `auto` to scale dynamically with PR size (24m on small PRs up to 50m on massive multi-bundle PRs). |
