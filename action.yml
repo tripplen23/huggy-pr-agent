@@ -396,6 +396,8 @@ runs:
         else
           CMD="$cmd" python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" command-start
         fi
+        # Scrub any checkout credentials from .git/config before running Pi
+        git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
 
     # Runs in its own step with neither GH_TOKEN nor PI_API_KEY in env, so
     # dependency lifecycle scripts (`postinstall`) from the PR branch cannot read

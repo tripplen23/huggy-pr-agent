@@ -394,7 +394,7 @@ const c = 4;
         prog = post_progress.build_progress_markdown(huge_files[:2], num_bundles=2, last_sha="abc1234567")
         self.assertTrue(prog.startswith("<!-- pi-review sha=abc1234567 -->"))
         self.assertIn("huggy-reviewing.svg", prog)
-        self.assertIn("huggy-icon.svg", post_review.REVIEW_HEADING)
+        self.assertIn("huggy-icon.svg", post_review.format_review_heading(post_review.HUGGY_ICON_URL))
         self.assertIn("2 parallel bundles", prog)
 
     def test_judge_decisions_and_verdict_recompute(self):

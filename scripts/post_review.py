@@ -25,9 +25,6 @@ def format_review_heading(icon_url: str) -> str:
     return f'## <img src="{icon_url}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
 
 
-REVIEW_HEADING = format_review_heading(HUGGY_ICON_URL)
-
-
 def build_verdict_presentation(
     verdict_line: str,
     findings: list[dict],
@@ -727,7 +724,7 @@ def main() -> int:
             sys.stderr.write(f"warning: inline review POST failed ({err_detail}); demoting to sticky\n")
             fallback.extend(summary for _, summary in inline)
 
-    head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:12]
+    head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:40]
     sticky_marker = f"<!-- pi-review sha={head_sha} -->" if head_sha else MARKER
     dyn_heading, styled_verdict = build_verdict_presentation(verdict_line, findings, intro_lines)
     body_parts = [sticky_marker, dyn_heading, "", styled_verdict]
