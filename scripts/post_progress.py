@@ -24,7 +24,7 @@ FIXING_SVG_URL = f"{ASSET_BASE}/huggy-fixing.svg"
 TESTING_SVG_URL = f"{ASSET_BASE}/huggy-testing.svg"
 THINKING_SVG_URL = f"{ASSET_BASE}/huggy-thinking.svg"
 BLOCKED_SVG_URL = f"{ASSET_BASE}/huggy-blocked.svg"
-CMD_PROGRESS_MARKER = "<!-- huggy-cmd-progress -->"
+CMD_PROGRESS_MARKER = fetch_pr_context.CMD_PROGRESS_MARKER
 
 
 def build_progress_markdown(
@@ -125,10 +125,6 @@ def build_command_progress_markdown(cmd: str, stage: str = "start") -> str:
             f"> {caption}",
         ]
     )
-
-
-def build_blocked_markdown(message: str, svg_url: str = BLOCKED_SVG_URL) -> str:
-    return f'<img src="{svg_url}" alt="Huggy stopped on a guarded boundary" width="160" />\n\n{message.strip()}'
 
 
 def write_gh_output(key: str, val: str) -> None:

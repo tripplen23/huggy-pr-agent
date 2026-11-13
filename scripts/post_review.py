@@ -168,6 +168,10 @@ def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = Fal
         total_count = last_conn.get("totalCount") or len(c_nodes)
         if total_count > len(c_nodes):
             return False
+    # Never resolve while an in-flight `@huggy` command animation is active in the thread
+    for cn in c_nodes:
+        if ((cn or {}).get("body") or "").strip().startswith("<!-- huggy-cmd-progress -->"):
+            return False
     last_c = c_nodes[-1] or {}
     last_author = (((last_c.get("author") or {}).get("login")) or "").lower()
     last_body = (last_c.get("body") or "").strip()
@@ -548,7 +552,7 @@ def main() -> int:
               firstComments: comments(first: 1) {
                 nodes { databaseId body }
               }
-              lastComments: comments(last: 1) {
+              lastComments: comments(last: 3) {
                 totalCount
                 nodes { databaseId author { login } body }
               }

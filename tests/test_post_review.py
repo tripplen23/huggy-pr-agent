@@ -1041,11 +1041,77 @@ const count = 1;
         self.assertIn("Review scope", judge_md)
         self.assertIn("Previous review", judge_md)
 
-        # 3. Command progress builders cover fixing -> testing, /ask thinking, and guarded blocked card
+        # 3. Command progress builders cover fixing -> testing and /ask thinking; in-flight progress protects thread from auto-resolve
         self.assertIn("huggy-fixing.svg", post_progress.build_command_progress_markdown("fix", "start"))
         self.assertIn("huggy-testing.svg", post_progress.build_command_progress_markdown("fix", "testing"))
         self.assertIn("huggy-thinking.svg", post_progress.build_command_progress_markdown("ask", "start"))
-        self.assertIn("huggy-blocked.svg", post_progress.build_blocked_markdown("Guarded path touched."))
+        self.assertFalse(
+            post_review.should_autoresolve_thread(
+                {
+                    "id": "T_INFLIGHT",
+                    "isResolved": False,
+                    "lastComments": {
+                        "totalCount": 3,
+                        "nodes": [
+                            {"author": {"login": "alice"}, "body": "/ask why is this unsafe?"},
+                            {"author": {"login": "github-actions"}, "body": post_progress.build_command_progress_markdown("ask", "start")},
+                        ],
+                    },
+                }
+            )
+        )
+
+        # 4. End-to-end `--phase find` -> `review-stage.json` -> `--phase judge` handoff
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = os.getcwd()
+            old_env = os.environ.copy()
+            old_argv = sys.argv[:]
+            old_invoke = run_review.invoke_pi
+            try:
+                os.chdir(tmp)
+                os.makedirs(os.path.join(tmp, "pi-action", "prompts"), exist_ok=True)
+                os.makedirs(os.path.join(tmp, "src"), exist_ok=True)
+                open(os.path.join(tmp, "src", "app.ts"), "w", encoding="utf-8").write("export const x = null;\n")
+                open(os.path.join(tmp, "brief-template.md"), "w", encoding="utf-8").write("Review prompt")
+                open(os.path.join(tmp, "rubric.md"), "w", encoding="utf-8").write("")
+                open(os.path.join(tmp, "scoped-rules.md"), "w", encoding="utf-8").write("")
+                open(os.path.join(tmp, "pi-action", "prompts", "judge.md"), "w", encoding="utf-8").write("Judge prompt")
+                open(os.path.join(tmp, "diff.patch"), "w", encoding="utf-8").write(
+                    "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,0 +1,1 @@\n+export const x = null;\n"
+                )
+                os.environ.update({"RUNNER_TEMP": tmp, "PI_API_KEY": "test-key", "PI_JUDGE_PASS": "true"})
+
+                def fake_invoke(**kwargs):
+                    if kwargs.get("label") == "judge":
+                        return '{"decisions":[{"index":0,"confidence":92,"action":"keep"}]}'
+                    return (
+                        "## Review by Huggy\n\n**Verdict:** needs changes\n**Effort:** 3 · **Security:** No issues\n\n"
+                        "### `src/app.ts:1` · High · Guard null export\n\nCaller crashes on null.\n\n"
+                        "<pr_description>\n## Summary\n- Exported x\n</pr_description>\n"
+                    )
+
+                run_review.invoke_pi = fake_invoke
+                sys.argv = ["run_review.py", "--phase", "find"]
+                self.assertEqual(run_review.main(), 0)
+                self.assertFalse(os.path.exists(os.path.join(tmp, "review.md")))
+                stage_obj = run_review.json.load(open(os.path.join(tmp, "review-stage.json"), encoding="utf-8"))
+                self.assertTrue(stage_obj["judge_pending"])
+                self.assertEqual(stage_obj["num_candidates"], 1)
+
+                sys.argv = ["run_review.py", "--phase", "judge"]
+                self.assertEqual(run_review.main(), 0)
+                final_review = open(os.path.join(tmp, "review.md"), encoding="utf-8").read()
+                self.assertIn("**Verdict:** needs changes", final_review)
+                self.assertIn("Guard null export", final_review)
+                self.assertIn("<pr_description>", final_review)
+            finally:
+                run_review.invoke_pi = old_invoke
+                os.chdir(old_cwd)
+                os.environ.clear()
+                os.environ.update(old_env)
+                sys.argv = old_argv
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ async function detectBaseRef(cwd: string, explicitBase?: string): Promise<string
 }
 
 export default function huggyExtension(pi: ExtensionAPI) {
-	pi.on("agent_end", async (_event, ctx) => {
+	pi.on("agent_settled", async (_event, ctx) => {
 		ctx.ui.setStatus("huggy", undefined);
 	});
 

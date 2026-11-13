@@ -710,7 +710,7 @@ runs:
         fi
 
     - name: Report when command fails
-      if: failure() && steps.prepare.outputs.go == 'true'
+      if: (failure() || cancelled()) && steps.prepare.outputs.go == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -742,9 +742,18 @@ runs:
         if [ -n "${PROGRESS_COMMENT_ID:-}" ]; then
           patch_url="$api/issues/comments/$PROGRESS_COMMENT_ID"
           [ "${PROGRESS_COMMENT_KIND:-}" = "pull" ] && patch_url="$api/pulls/comments/$PROGRESS_COMMENT_ID"
-          if curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" "$patch_url" -d "$fail_payload" > /dev/null 2>&1; then
-            exit 0
-          fi
+          prog_body=$(curl -fsSL -H "$auth" "$patch_url" | jq -r '.body // ""' 2>/dev/null || true)
+          case "$prog_body" in
+            "<!-- huggy-cmd-progress -->"*)
+              if curl -fsSL -X PATCH -H "$auth" -H "Content-Type: application/json" "$patch_url" -d "$fail_payload" > /dev/null 2>&1; then
+                exit 0
+              fi
+              ;;
+            ?*)
+              # Progress comment was already replaced with a specific refusal message; preserve it!
+              exit 0
+              ;;
+          esac
         fi
         if [ -n "$THREAD" ]; then
           post="$api/pulls/$PR/comments/$COMMENT_ID/replies"

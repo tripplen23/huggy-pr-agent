@@ -113,6 +113,7 @@ IGNORED_FILE_PATTERNS = (
 )
 IGNORED_RE = re.compile("|".join(IGNORED_FILE_PATTERNS))
 REVIEW_SHA_RE = re.compile(r"^<!--\s*pi-review(?:\s+sha=([0-9a-fA-F]{7,40}))?\s*-->")
+CMD_PROGRESS_MARKER = "<!-- huggy-cmd-progress -->"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 UNTRUSTED_RULE_DIRS = {"test", "tests", "__tests__", "fixtures", "snapshots", "__snapshots__", "vendor", "node_modules", "dist", "generated"}
 
@@ -963,7 +964,7 @@ def format_pr_context(
         raw_b = (ic.get("body") or "").strip()
         if (
             raw_b.startswith("<!-- pi-review")
-            or raw_b.startswith("<!-- huggy-cmd-progress -->")
+            or raw_b.startswith(CMD_PROGRESS_MARKER)
             or raw_b.startswith("<!-- preview-comment -->")
         ):
             continue
