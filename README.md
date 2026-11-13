@@ -243,7 +243,7 @@ Comment any of these in the **PR conversation**, inside an **inline diff review 
 | `gcp_credentials_json` | `""` | Google Cloud Service Account JSON key for `google-vertex/*` models (omit when using Workload Identity Federation). |
 | `model` | `opencode-go/deepseek-v4.1-flash` | Primary / Lead model ID passed to `pi --model` (reviews the highest-risk bundle and runs the Judge pass). |
 | `wingman_model` | `""` | Optional Wingman model ID for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Defaults to `model` when empty. |
-| `fallback_model` | `opencode-go/glm-5.3-flash` | Emergency fallback model tried only when `model` or `wingman_model` errors (`429`/`5xx`) or times out — supports cross-provider failover. |
+| `fallback_model` | `opencode-go/glm-5.3-flash` | Emergency fallback model tried only after `model` or `wingman_model` fails (error, non-zero exit, missing verdict, or timeout) — supports cross-provider failover. |
 | `thinking` | `high` | Thinking depth (`off`, `minimal`, `low`, `medium`, `high`). |
 | `review_tools` | `read,grep,find,ls` | Built-in Pi tools enabled during read-only PR reviews. |
 | `review_timeout_minutes` | `auto` | Review timeout budget in minutes, or `auto` to scale dynamically with PR size (24m on small PRs up to 50m on massive multi-bundle PRs). |

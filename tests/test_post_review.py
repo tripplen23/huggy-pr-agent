@@ -934,11 +934,38 @@ const count = 1;
         _, _, partial_stale = post_review.classify_review_threads(threads, [], is_partial_coverage=True)
         self.assertEqual(partial_stale, [])
 
-        # 4. Branch/title direct issue extraction, `huggy:deep` label, downvoted 👎 feedback, and self-retraction drop
+        # 4. Branch/title direct issue extraction (ignores `fix/500-error-handling`!), `huggy:deep` label, downvoted 👎 feedback, and self-retraction drop
         self.assertEqual(
-            fetch_pr_context.extract_direct_issue_numbers("feat: billing (#88)", "fix/123-race", "Closes #456"),
+            fetch_pr_context.extract_direct_issue_numbers("feat: billing (#88)", "fix/issue-123-race", "Closes #456\nRefs #999"),
             [88, 123, 456],
         )
+        self.assertEqual(
+            fetch_pr_context.extract_direct_issue_numbers("fix: handle HTTP 500", "fix/500-error-handling", "Refs #999"),
+            [],
+        )
+        # Production GraphQL shape (`firstComments` + `lastComments`) + `/ask` without `?` guard
+        prod_threads = [
+            {
+                "id": "T_PROD_FIXED",
+                "isResolved": False,
+                "path": "src/other.ts",
+                "startLine": 10,
+                "line": 10,
+                "firstComments": {"nodes": [{"databaseId": 701, "body": "<!-- pi id=aabbccdde0 -->\nOld"}]},
+                "lastComments": {"totalCount": 15, "nodes": [{"databaseId": 715, "author": {"login": "github-actions"}, "body": "Fixed"}]},
+            },
+            {
+                "id": "T_PROD_ASK_NO_QMARK",
+                "isResolved": False,
+                "path": "src/other.ts",
+                "startLine": 20,
+                "line": 20,
+                "firstComments": {"nodes": [{"databaseId": 702, "body": "<!-- pi id=aabbccdde1 -->\nOld"}]},
+                "lastComments": {"totalCount": 2, "nodes": [{"databaseId": 703, "author": {"login": "alice"}, "body": "/ask why is this unsafe"}]},
+            },
+        ]
+        _, _, prod_stale = post_review.classify_review_threads(prod_threads, findings, is_partial_coverage=False)
+        self.assertEqual(prod_stale, ["T_PROD_FIXED"])
         gql_sample = {
             "data": {
                 "repository": {

@@ -65,7 +65,9 @@ jobs:
         with:
           mode: comment
           model: google-vertex/gemini-4-carbon
+          wingman_model: google-vertex/gemini-4-argon
           fallback_model: opencode-go/deepseek-v4.1-flash
+          max_parallel_bundles: "4"
           gcp_project: your-gcp-project-id
           gcp_location: global
           gcp_credentials_json: ${{ secrets.GOOGLE_VERTEX_CREDENTIALS }}

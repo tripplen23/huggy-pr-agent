@@ -549,11 +549,11 @@ def clean_body(text: str, limit: int = 1200) -> str:
 
 
 DIRECT_ISSUE_KW_RE = re.compile(
-    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s*:?\s*#(\d{1,7})\b",
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d{1,7})\b",
     re.I,
 )
 BRANCH_ISSUE_RE = re.compile(
-    r"(?:^|/)(?:issue|gh|bug|fix|feat|chore)[/_-]#?(\d{1,7})(?:[/_-]|$)",
+    r"(?:^|/|-|_)(?:issue[/_-]|gh[/_-]|#)(\d{1,7})(?:[/_-]|$)",
     re.I,
 )
 TITLE_ISSUE_RE = re.compile(r"(?:^|\s|\()#(\d{1,7})(?:\)|\b)")
@@ -610,7 +610,8 @@ def fetch_extra_direct_issues(
                             "state": state,
                         }
                     )
-        except Exception:
+        except Exception as exc:
+            sys.stderr.write(f"warning: could not fetch direct issue #{num} ({exc})\n")
             continue
     return out
 
@@ -626,29 +627,10 @@ def has_deep_review_label(data: dict) -> bool:
     return False
 
 
-TRUSTED_ASSOCS = {"OWNER", "MEMBER", "COLLABORATOR"}
-
-
 def extract_downvoted_feedback(data: dict) -> list[str]:
-    """Extract earlier Huggy inline findings downvoted with 👎 by trusted repo members (for nitpick suppression)."""
+    """Extract earlier Huggy inline findings downvoted with 👎 (used strictly to avoid minor/nitpick repeats)."""
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
-    trusted_logins: set[str] = set()
-    pr_author = (((pr.get("author") or {}).get("login")) or "").lower()
-    if pr_author and (pr.get("authorAssociation") or "") in TRUSTED_ASSOCS:
-        trusted_logins.add(pr_author)
-    for ic in ((pr.get("comments") or {}).get("nodes")) or []:
-        if ic and (ic.get("authorAssociation") or "") in TRUSTED_ASSOCS:
-            lg = (((ic.get("author") or {}).get("login")) or "").lower()
-            if lg:
-                trusted_logins.add(lg)
     threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
-    for t in threads:
-        for c in (((t or {}).get("comments") or {}).get("nodes")) or []:
-            if c and (c.get("authorAssociation") or "") in TRUSTED_ASSOCS:
-                lg = (((c.get("author") or {}).get("login")) or "").lower()
-                if lg:
-                    trusted_logins.add(lg)
-
     downvoted: list[str] = []
     for t in threads:
         if not t:
@@ -661,19 +643,9 @@ def extract_downvoted_feedback(data: dict) -> list[str]:
             raw_body = (c.get("body") or "").strip()
             if not raw_body.startswith("<!-- pi"):
                 continue
-            rx = c.get("reactions") or {}
-            td = rx.get("totalCount") or 0
-            if td <= 0:
-                continue
-            r_nodes = rx.get("nodes")
-            if isinstance(r_nodes, list) and r_nodes:
-                reactors = {(((rn or {}).get("user") or {}).get("login") or "").lower() for rn in r_nodes}
-                reactors.discard("")
-                if trusted_logins and not (reactors & trusted_logins):
-                    continue
-                if not trusted_logins and "authorAssociation" in pr:
-                    continue
-            downvoted.append(f"- `{path}:{ln}` (👎 downvoted): {clean_body(raw_body, limit=260)}")
+            td = ((c.get("reactions") or {}).get("totalCount")) or 0
+            if td > 0:
+                downvoted.append(f"- `{path}:{ln}` (👎 downvoted): {clean_body(raw_body, limit=260)}")
     return downvoted[-15:]
 
 

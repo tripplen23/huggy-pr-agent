@@ -179,7 +179,7 @@ def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = Fal
     )
     if not is_bot:
         stripped_cmd = re.sub(r"^>.*$", "", last_body, flags=re.M).strip()
-        if stripped_cmd.endswith("?"):
+        if "?" in stripped_cmd or re.match(r"^(?:@(?:huggy|pi)\s+)?/ask\b", stripped_cmd, re.I):
             return False
     return True
 

@@ -39,7 +39,7 @@ inputs:
     required: false
     default: ""
   fallback_model:
-    description: "Fallback model identifier tried only when `model` or `wingman_model` errors or times out."
+    description: "Emergency fallback model identifier tried only after `model` or `wingman_model` fails (error, non-zero exit, missing verdict, or timeout)."
     required: false
     default: "opencode-go/glm-5.3-flash"
   thinking:
