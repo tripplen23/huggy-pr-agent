@@ -19,9 +19,10 @@ ASSET_BASE = "https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/ass
 HUGGY_ICON_URL = f"{ASSET_BASE}/huggy-icon.svg"
 HUGGY_GOOD_ICON_URL = f"{ASSET_BASE}/huggy-good.svg"
 HUGGY_SERIOUS_ICON_URL = f"{ASSET_BASE}/huggy-serious.svg"
-REVIEW_HEADING = (
-    f'## <img src="{HUGGY_ICON_URL}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
-)
+
+
+def format_review_heading(icon_url: str) -> str:
+    return f'## <img src="{icon_url}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
 
 
 def build_verdict_presentation(
@@ -37,6 +38,10 @@ def build_verdict_presentation(
     if has_high:
         icon = HUGGY_SERIOUS_ICON_URL
         badge = "![needs changes · high](https://img.shields.io/badge/needs_changes_%C2%B7_high-dc2626)"
+    elif has_sec and "looks good" not in raw_v:
+        icon = HUGGY_SERIOUS_ICON_URL
+        lbl = "nits" if raw_v.startswith("nits") else "needs_changes"
+        badge = f"![{lbl.replace('_', ' ')} · security](https://img.shields.io/badge/{lbl}_%C2%B7_security-dc2626)"
     elif "looks good" in raw_v:
         icon = HUGGY_GOOD_ICON_URL
         badge = "![looks good](https://img.shields.io/badge/looks_good-16a34a)"
@@ -46,15 +51,11 @@ def build_verdict_presentation(
     elif "incomplete" in raw_v:
         icon = HUGGY_ICON_URL
         badge = "![incomplete (partial coverage)](https://img.shields.io/badge/incomplete_(partial_coverage)-64748b)"
-    elif has_sec:
-        icon = HUGGY_SERIOUS_ICON_URL
-        badge = "![needs changes · security](https://img.shields.io/badge/needs_changes_%C2%B7_security-dc2626)"
     else:
         icon = HUGGY_ICON_URL
         badge = "![needs changes](https://img.shields.io/badge/needs_changes-d97706)"
 
-    heading = f'## <img src="{icon}" width="28" height="28" align="absmiddle" alt="Huggy" /> Review by Huggy'
-    return heading, f"**Verdict:** {badge}"
+    return format_review_heading(icon), f"**Verdict:** {badge}"
 DESC_START = "<!-- pi-description-start -->"
 DESC_END = "<!-- pi-description-end -->"
 BADGES = {
@@ -224,6 +225,21 @@ def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = Fal
     return True
 
 
+def is_thread_resolved_response(res: dict | None) -> tuple[bool, str]:
+    """Verify a GitHub GraphQL `resolveReviewThread` response (which returns HTTP 200 even on FORBIDDEN errors)."""
+    payload = res or {}
+    gql_errs = payload.get("errors") or []
+    is_res = (((payload.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}).get("isResolved")
+    if gql_errs or is_res is not True:
+        msg = (
+            gql_errs[0].get("message")
+            if gql_errs and isinstance(gql_errs[0], dict)
+            else (str(gql_errs) if gql_errs else "thread remained unresolved")
+        )
+        return False, msg or "thread remained unresolved"
+    return True, ""
+
+
 def classify_review_threads(
     nodes: list[dict],
     findings: list[dict],
@@ -235,7 +251,11 @@ def classify_review_threads(
     stale_thread_ids: list[str] = []
 
     new_targets = {(f["path"], f["eff_start"], f["end"]) for f in findings if f.get("end_hunk") is not None}
-    new_fps = {(f["path"], f["fingerprint"]) for f in findings if f.get("fingerprint")}
+    fp_counts: dict[tuple[str, str], int] = {}
+    for f in findings:
+        if f.get("fingerprint"):
+            fp_counts[(f["path"], f["fingerprint"])] = fp_counts.get((f["path"], f["fingerprint"]), 0) + 1
+    new_fps = {k for k, cnt in fp_counts.items() if cnt == 1}
 
     for t in nodes or []:
         if not t or t.get("isResolved"):
@@ -625,15 +645,24 @@ def main() -> int:
     resolved_count = 0
     for tid in stale_thread_ids:
         try:
-            api(
-                "POST",
-                "https://api.github.com/graphql",
-                {
-                    "query": "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }",
-                    "variables": {"id": tid},
-                },
+            res = (
+                api(
+                    "POST",
+                    "https://api.github.com/graphql",
+                    {
+                        "query": "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }",
+                        "variables": {"id": tid},
+                    },
+                )
+                or {}
             )
-            resolved_count += 1
+            ok_res, err_msg = is_thread_resolved_response(res)
+            if not ok_res:
+                sys.stderr.write(
+                    f"warning: resolveReviewThread failed for {tid}: {err_msg}\n"
+                )
+            else:
+                resolved_count += 1
         except Exception as exc:
             sys.stderr.write(f"warning: could not resolve stale thread {tid} ({exc})\n")
 
@@ -692,7 +721,7 @@ def main() -> int:
             sys.stderr.write(f"warning: inline review POST failed ({err_detail}); demoting to sticky\n")
             fallback.extend(summary for _, summary in inline)
 
-    head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:12]
+    head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:40]
     sticky_marker = f"<!-- pi-review sha={head_sha} -->" if head_sha else MARKER
     dyn_heading, styled_verdict = build_verdict_presentation(verdict_line, findings, intro_lines)
     body_parts = [sticky_marker, dyn_heading, "", styled_verdict]

@@ -394,7 +394,7 @@ const c = 4;
         prog = post_progress.build_progress_markdown(huge_files[:2], num_bundles=2, last_sha="abc1234567")
         self.assertTrue(prog.startswith("<!-- pi-review sha=abc1234567 -->"))
         self.assertIn("huggy-reviewing.svg", prog)
-        self.assertIn("huggy-icon.svg", post_review.REVIEW_HEADING)
+        self.assertIn("huggy-icon.svg", post_review.format_review_heading(post_review.HUGGY_ICON_URL))
         self.assertIn("2 parallel bundles", prog)
 
     def test_judge_decisions_and_verdict_recompute(self):
@@ -435,6 +435,7 @@ const count = 1;
         )
         # High was dropped, only Low remains -> Verdict automatically adjusts to `nits`!
         self.assertIn("**Verdict:** nits", final_md)
+        self.assertIn("**Security:** Needs attention", final_md)
 
         # If all findings are dropped -> Verdict automatically adjusts to `looks good`!
         clean_md = run_review.assemble_review_markdown(
@@ -1042,10 +1043,16 @@ const count = 1;
         self.assertIn("needs_changes-d97706", v_med)
 
         h_nits, v_nits = post_review.build_verdict_presentation(
-            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** Needs attention"]
+            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** No issues"]
         )
         self.assertIn("huggy-good.svg", h_nits)
         self.assertIn("nits-2563eb", v_nits)
+
+        h_nits_sec, v_nits_sec = post_review.build_verdict_presentation(
+            "**Verdict:** nits", [{"severity": "low"}], ["**Effort:** 2 · **Security:** Needs attention"]
+        )
+        self.assertIn("huggy-serious.svg", h_nits_sec)
+        self.assertIn("nits_%C2%B7_security-dc2626", v_nits_sec)
 
         h_high, v_high = post_review.build_verdict_presentation(
             "**Verdict:** needs changes", [{"severity": "high"}], []
@@ -1123,10 +1130,98 @@ const count = 1;
                 run_review.invoke_pi = fake_invoke
                 sys.argv = ["run_review.py", "--phase", "find"]
                 self.assertEqual(run_review.main(), 0)
-                self.assertFalse(os.path.exists(os.path.join(tmp, "review.md")))
+                # Provisional review.md is written even before Judge runs so an interrupted Judge never leaves review.md missing
+                self.assertTrue(os.path.exists(os.path.join(tmp, "review.md")))
                 stage_obj = run_review.json.load(open(os.path.join(tmp, "review-stage.json"), encoding="utf-8"))
                 self.assertTrue(stage_obj["judge_pending"])
                 self.assertEqual(stage_obj["num_candidates"], 1)
+
+                # Colliding fingerprints resolve the superseded thread (`stale == ["T_DUP"]`) and repost both findings fresh
+                dup_findings = [
+                    {"path": "src/app.ts", "eff_start": 10, "end": 10, "end_hunk": 1, "fingerprint": "aabbcc1234"},
+                    {"path": "src/app.ts", "eff_start": 40, "end": 40, "end_hunk": 2, "fingerprint": "aabbcc1234"},
+                ]
+                _, dup_by_fp, dup_stale = post_review.classify_review_threads(
+                    [
+                        {
+                            "id": "T_DUP",
+                            "isResolved": False,
+                            "path": "src/app.ts",
+                            "startLine": 5,
+                            "line": 5,
+                            "firstComments": {"nodes": [{"databaseId": 1, "body": "<!-- pi id=aabbcc1234 -->\nOld"}]},
+                            "lastComments": {"totalCount": 1, "nodes": [{"databaseId": 1, "author": {"login": "github-actions"}, "body": "Old"}]},
+                        }
+                    ],
+                    dup_findings,
+                )
+                self.assertEqual(dup_stale, ["T_DUP"])
+                self.assertEqual(dup_by_fp, {})
+
+                # GraphQL `resolveReviewThread` response validator rejects HTTP-200 FORBIDDEN errors
+                ok_forbid, msg_forbid = post_review.is_thread_resolved_response(
+                    {"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]}
+                )
+                self.assertFalse(ok_forbid)
+                self.assertIn("Resource not accessible", msg_forbid)
+                ok_false, _ = post_review.is_thread_resolved_response(
+                    {"data": {"resolveReviewThread": {"thread": {"isResolved": False}}}}
+                )
+                self.assertFalse(ok_false)
+                ok_true, _ = post_review.is_thread_resolved_response(
+                    {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}
+                )
+                self.assertTrue(ok_true)
+
+                # `compute_incremental_diff` uses ephemeral `-c http...extraheader`, expands 12-hex SHAs via API, and removes `.git/FETCH_HEAD`
+                seen_git_calls: list[list[str]] = []
+                old_call = fetch_pr_context.subprocess.call
+                old_chk = fetch_pr_context.subprocess.check_output
+                old_uopen = fetch_pr_context.urllib.request.urlopen
+                try:
+                    os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
+                    open(os.path.join(tmp, ".git", "FETCH_HEAD"), "w", encoding="utf-8").write("stale")
+                    os.environ.update({"REPO": "o/r", "GH_TOKEN": "SECRET_TOK", "PR": "42"})
+
+                    class FakeShaResp:
+                        def read(self):
+                            return b'{"sha":"11223344556677889900aabbccddeeff00112233"}'
+
+                        def __enter__(self):
+                            return self
+
+                        def __exit__(self, *a):
+                            return False
+
+                    def fake_call(argv, **kw):
+                        seen_git_calls.append(list(argv))
+                        if "cat-file" in argv:
+                            # Return 0 only once the 40-hex SHA has been fetched
+                            return 0 if any("11223344556677889900aabbccddeeff00112233" in c for c in seen_git_calls if "fetch" in c) else 1
+                        return 0
+
+                    def fake_chk(argv, **kw):
+                        if "rev-list" in argv:
+                            return "deadbeef9999\n"
+                        if "rev-parse" in argv:
+                            return "deadbeef99990000111122223333444455556666\n"
+                        return "diff --git a/a.py b/a.py\n"
+
+                    fetch_pr_context.subprocess.call = fake_call
+                    fetch_pr_context.subprocess.check_output = fake_chk
+                    fetch_pr_context.urllib.request.urlopen = lambda req, timeout=6: FakeShaResp()
+                    inc_out = fetch_pr_context.compute_incremental_diff("112233445566")
+                    self.assertIn("diff --git", inc_out)
+                    flat_args = " ".join(" ".join(c) for c in seen_git_calls)
+                    self.assertNotIn("SECRET_TOK", flat_args)
+                    self.assertIn("AUTHORIZATION: basic", flat_args)
+                    self.assertIn("+refs/pull/42/head", flat_args)
+                    self.assertIn("11223344556677889900aabbccddeeff00112233", flat_args)
+                    self.assertFalse(os.path.exists(os.path.join(tmp, ".git", "FETCH_HEAD")))
+                finally:
+                    fetch_pr_context.subprocess.call = old_call
+                    fetch_pr_context.subprocess.check_output = old_chk
+                    fetch_pr_context.urllib.request.urlopen = old_uopen
 
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)
@@ -1134,6 +1229,15 @@ const count = 1;
                 self.assertIn("**Verdict:** needs changes", final_review)
                 self.assertIn("Guard null export", final_review)
                 self.assertIn("<pr_description>", final_review)
+
+                # `extract_json_object` handles nested triple-backticks inside JSON strings and leading `{prose}`
+                tricky_json = 'Note {ignore}:\n```json\n{"decisions":[{"index":0,"confidence":90,"action":"keep","reason":"fenced ```block``` ok"}]}\n```'
+                self.assertEqual(run_review.extract_json_object(tricky_json)["decisions"][0]["confidence"], 90)
+
+                # When Judge fails to produce valid decisions JSON, `--phase judge` still writes `review.md` and exits 1
+                run_review.invoke_pi = lambda **kw: "unparseable judge output"
+                self.assertEqual(run_review.main(), 1)
+                self.assertTrue(os.path.exists(os.path.join(tmp, "review.md")))
             finally:
                 run_review.invoke_pi = old_invoke
                 os.chdir(old_cwd)

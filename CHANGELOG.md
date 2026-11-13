@@ -2,6 +2,13 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.11.1] - 2026-11-13
+
+### Fixed
+- **Verified GraphQL `resolveReviewThread` & Ephemeral Fetch Auth (`scripts/post_review.py`, `scripts/fetch_pr_context.py`, `action.yml`)**: inspects GraphQL `errors` and `thread.isResolved` before counting threads as resolved, uses `persist-credentials: false` + ephemeral `-c http.<server>/.extraheader` + `FETCH_HEAD` cleanup so `GH_TOKEN` never persists on disk during `Run Pi`, and reads `.gitattributes` from `base` via `GIT_ATTR_SOURCE=base`.
+- **Provisional `review.md` on `--phase find` (`scripts/run_review.py`)**: writes a provisional `review.md` before handing off to `--phase judge` so `post_review.py` never fails if the Judge step is skipped or interrupted, and preserves `Security: Needs attention` on `nits` verdicts.
+- **Ambiguous Fingerprint & Security Badge Handling (`scripts/post_review.py`)**: avoids cross-line overwrites or premature thread resolution when two findings in the same file share a fingerprint, and displays a distinct `nits · security` alert badge when security attention is flagged without High-severity findings.
+
 ## [1.11.0] - 2026-11-13
 
 ### Added

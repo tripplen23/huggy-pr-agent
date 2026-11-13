@@ -35,7 +35,7 @@ inputs:
     required: false
     default: "opencode-go/deepseek-v4.1-flash"
   wingman_model:
-    description: "Optional Wingman Pi model identifier (`provider/model`) for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Defaults to `model` when empty."
+    description: "Optional Wingman Pi model identifier (`provider/model`) for parallel non-lead bundles (e.g. `google-vertex/gemini-4-argon`). Must be reachable with the same credentials configured for `model` (`api_key`/`api_key_env` or Vertex `gcp_*`). Defaults to `model` when empty."
     required: false
     default: ""
   fallback_model:
@@ -166,6 +166,7 @@ runs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 2
+        persist-credentials: false
         token: ${{ inputs.github_token }}
 
     - name: Resolve base branch, rubric and review context
@@ -173,6 +174,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
+        SERVER: ${{ github.server_url }}
         REPO: ${{ github.repository }}
         TARGET: ${{ github.event.pull_request.base.ref }}
         PR: ${{ github.event.pull_request.number }}
@@ -185,10 +187,12 @@ runs:
         mkdir -p "$RUNNER_TEMP/pi-action"
         cp -R "$ACTION_PATH/scripts" "$ACTION_PATH/prompts" "$RUNNER_TEMP/pi-action/"
 
+        git_basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')
         if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
           git branch -f base "HEAD^1"
         else
-          git fetch --no-tags --depth=100 origin \
+          git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $git_basic" \
+            fetch --no-tags --depth=100 "$SERVER/$REPO.git" \
             "+refs/heads/$TARGET:refs/remotes/base" "+refs/pull/$PR/head:refs/remotes/pr-head"
           git checkout -q refs/remotes/pr-head
           mb=$(git merge-base refs/remotes/base refs/remotes/pr-head 2>/dev/null || true)
@@ -217,9 +221,12 @@ runs:
           printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief-template.md"
         fi
 
-        git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
+        # Scrub checkout token from .git/config and FETCH_HEAD before the Pi step runs
+        git config --local --unset-all "http.$SERVER/.extraheader" 2>/dev/null || true
+        rm -f .git/FETCH_HEAD
 
     - name: Run Pi (bundle finders)
       if: steps.gate_review.outputs.go == 'true'
@@ -258,7 +265,9 @@ runs:
         python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" judge
 
     - name: Run Pi (precision judge)
+      id: judge
       if: steps.gate_review.outputs.go == 'true'
+      continue-on-error: true
       shell: bash
       env:
         PI_API_KEY: ${{ inputs.api_key }}
@@ -287,9 +296,23 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PI_REVIEW_PROFILE: ${{ inputs.review_profile }}
+        JUDGE_OUTCOME: ${{ steps.judge.outcome }}
       run: |
         set -euo pipefail
-        git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        if [ "${JUDGE_OUTCOME:-}" = "failure" ] && [ -f review.md ]; then
+          python3 -c '
+        p = open("review.md", encoding="utf-8").read()
+        note = "\n> ⚠️ **Judge pass interrupted:** publishing unverified finder candidates from `--phase find`.\n"
+        lines = p.splitlines()
+        insert_at = 0
+        for i, ln in enumerate(lines):
+            if ln.startswith("**Effort:**") or ln.startswith("**Verdict:**"):
+                insert_at = i + 1
+        lines.insert(insert_at, note)
+        open("review.md", "w", encoding="utf-8").write("\n".join(lines) + "\n")
+        '
+        fi
+        GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
 
     - name: Replace a stale verdict when review fails
@@ -324,6 +347,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
+        SERVER: ${{ github.server_url }}
         REPO: ${{ github.repository }}
         PR: ${{ github.event.issue.number || github.event.pull_request.number }}
         COMMENT_BODY: ${{ github.event.comment.body }}
@@ -369,7 +393,8 @@ runs:
           echo "go=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        if [ "$cmd" = "fix" ] && ! git ls-remote --exit-code "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" "refs/heads/$branch" > /dev/null 2>&1; then
+        git_basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')
+        if [ "$cmd" = "fix" ] && ! git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $git_basic" ls-remote --exit-code "$SERVER/$REPO.git" "refs/heads/$branch" > /dev/null 2>&1; then
           if [ -n "$THREAD" ]; then reply_url="$api/pulls/$PR/comments/$COMMENT_ID/replies"; else reply_url="$api/issues/$PR/comments"; fi
           curl -fsSL -X POST -H "$auth" -H "Content-Type: application/json" \
             "$reply_url" -d "$(jq -n --arg b "$blocked_img"$'\n\n'"Branch \`$branch\` has been deleted on GitHub, so new commits cannot be pushed to this PR yet. Click **Restore branch** on the PR (or push \`$branch\` again), then re-run \`@huggy\`." '{body: $b}')" > /dev/null
@@ -378,13 +403,14 @@ runs:
         fi
 
         git init -q .
-        git fetch -q --no-tags "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
+        git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $git_basic" \
+          fetch -q --no-tags "$SERVER/$REPO.git" \
           "+refs/pull/$PR/head:refs/heads/pr-head" "+refs/heads/$base:refs/heads/base-tip"
         git checkout -q pr-head
         mb=$(git merge-base base-tip pr-head 2>/dev/null || git rev-parse base-tip)
         git branch -f base "$mb"
 
-        git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/prepare_command.py" build-request "$RUNNER_TEMP/fix-request.md"
         if [ "$cmd" = "review" ]; then
@@ -392,6 +418,9 @@ runs:
         else
           CMD="$cmd" python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" command-start
         fi
+        # Scrub any checkout credentials from .git/config and FETCH_HEAD before running Pi
+        git config --local --unset-all "http.$SERVER/.extraheader" 2>/dev/null || true
+        rm -f .git/FETCH_HEAD
 
     # Runs in its own step with neither GH_TOKEN nor PI_API_KEY in env, so
     # dependency lifecycle scripts (`postinstall`) from the PR branch cannot read
@@ -603,7 +632,7 @@ runs:
         if [ "$CMD" = "review" ] || [ "$CMD" = "improve" ]; then
           cleanup_progress_comment
           export HEAD_SHA="$(git rev-parse HEAD)"
-          git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+          GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
           python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
           exit 0
         fi
@@ -664,11 +693,13 @@ runs:
           fi
         fi
 
+        git_basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')
+        srv="${GITHUB_SERVER_URL:-https://github.com}"
         git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
           -c user.name=Huggy -c user.email=huggy@noreply.github.com \
           commit -q -m "huggy: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
-        git push -q --no-verify "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
-          "HEAD:refs/heads/$branch"
+        git -c "http.$srv/.extraheader=AUTHORIZATION: basic $git_basic" \
+          push -q --no-verify "$srv/$REPO.git" "HEAD:refs/heads/$branch"
 
         sha=$(git rev-parse --short HEAD)
         answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$sha" "$branch" "$reply")"
