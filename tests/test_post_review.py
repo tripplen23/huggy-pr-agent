@@ -1158,6 +1158,21 @@ const count = 1;
                 self.assertEqual(dup_stale, [])
                 self.assertEqual(dup_by_fp, {})
 
+                # GraphQL `resolveReviewThread` response validator rejects HTTP-200 FORBIDDEN errors
+                ok_forbid, msg_forbid = post_review.is_thread_resolved_response(
+                    {"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]}
+                )
+                self.assertFalse(ok_forbid)
+                self.assertIn("Resource not accessible", msg_forbid)
+                ok_false, _ = post_review.is_thread_resolved_response(
+                    {"data": {"resolveReviewThread": {"thread": {"isResolved": False}}}}
+                )
+                self.assertFalse(ok_false)
+                ok_true, _ = post_review.is_thread_resolved_response(
+                    {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}
+                )
+                self.assertTrue(ok_true)
+
                 sys.argv = ["run_review.py", "--phase", "judge"]
                 self.assertEqual(run_review.main(), 0)
                 final_review = open(os.path.join(tmp, "review.md"), encoding="utf-8").read()

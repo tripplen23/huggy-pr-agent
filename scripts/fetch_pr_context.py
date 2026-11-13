@@ -993,7 +993,10 @@ def compute_incremental_diff(last_sha: str) -> str:
         if head_sha.startswith(last_sha) or last_sha.startswith(head_sha[:7]):
             return ""
         if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
-            subprocess.call(["git", "fetch", "-q", "--no-tags", "--depth=20", "origin", last_sha], stderr=subprocess.DEVNULL)
+            repo_env = os.environ.get("REPO") or ""
+            tok_env = os.environ.get("GH_TOKEN") or ""
+            remote = f"https://x-access-token:{tok_env}@github.com/{repo_env}.git" if (repo_env and tok_env) else "origin"
+            subprocess.call(["git", "fetch", "-q", "--no-tags", "--depth=20", remote, last_sha], stderr=subprocess.DEVNULL)
         if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
             return ""
         return subprocess.check_output(

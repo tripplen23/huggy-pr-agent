@@ -78,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write # required by GitHub GraphQL resolveReviewThread
       pull-requests: write
     concurrency:
       group: huggy-review-${{ github.event.pull_request.number }}

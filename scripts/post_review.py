@@ -228,6 +228,21 @@ def should_autoresolve_thread(thread_node: dict, is_partial_coverage: bool = Fal
     return True
 
 
+def is_thread_resolved_response(res: dict | None) -> tuple[bool, str]:
+    """Verify a GitHub GraphQL `resolveReviewThread` response (which returns HTTP 200 even on FORBIDDEN errors)."""
+    payload = res or {}
+    gql_errs = payload.get("errors") or []
+    is_res = (((payload.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}).get("isResolved")
+    if gql_errs or is_res is not True:
+        msg = (
+            gql_errs[0].get("message")
+            if gql_errs and isinstance(gql_errs[0], dict)
+            else (str(gql_errs) if gql_errs else "thread remained unresolved")
+        )
+        return False, msg or "thread remained unresolved"
+    return True, ""
+
+
 def classify_review_threads(
     nodes: list[dict],
     findings: list[dict],
@@ -647,10 +662,8 @@ def main() -> int:
                 )
                 or {}
             )
-            gql_errs = res.get("errors") or []
-            is_res = (((res.get("data") or {}).get("resolveReviewThread") or {}).get("thread") or {}).get("isResolved")
-            if gql_errs or not is_res:
-                err_msg = (gql_errs[0].get("message") if gql_errs and isinstance(gql_errs[0], dict) else str(gql_errs)) or "thread remained unresolved"
+            ok_res, err_msg = is_thread_resolved_response(res)
+            if not ok_res:
                 sys.stderr.write(
                     f"warning: resolveReviewThread failed for {tid}: {err_msg}\n"
                 )

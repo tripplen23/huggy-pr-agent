@@ -166,6 +166,7 @@ runs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 2
+        persist-credentials: false
         token: ${{ inputs.github_token }}
 
     - name: Resolve base branch, rubric and review context
@@ -188,7 +189,7 @@ runs:
         if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
           git branch -f base "HEAD^1"
         else
-          git fetch --no-tags --depth=100 origin \
+          git fetch --no-tags --depth=100 "https://x-access-token:$GH_TOKEN@github.com/$REPO.git" \
             "+refs/heads/$TARGET:refs/remotes/base" "+refs/pull/$PR/head:refs/remotes/pr-head"
           git checkout -q refs/remotes/pr-head
           mb=$(git merge-base refs/remotes/base refs/remotes/pr-head 2>/dev/null || true)
@@ -261,6 +262,7 @@ runs:
 
     - name: Run Pi (precision judge)
       if: steps.gate_review.outputs.go == 'true'
+      continue-on-error: true
       shell: bash
       env:
         PI_API_KEY: ${{ inputs.api_key }}
