@@ -1235,9 +1235,44 @@ const count = 1;
                 self.assertEqual(run_review.extract_json_object(tricky_json)["decisions"][0]["confidence"], 90)
 
                 # When Judge fails to produce valid decisions JSON, `--phase judge` still writes `review.md` and exits 1
+                os.remove(os.path.join(tmp, "review.md"))
                 run_review.invoke_pi = lambda **kw: "unparseable judge output"
                 self.assertEqual(run_review.main(), 1)
-                self.assertTrue(os.path.exists(os.path.join(tmp, "review.md")))
+                self.assertIn("Guard null export", open(os.path.join(tmp, "review.md"), encoding="utf-8").read())
+
+                # GCP Cloud Run webhook HMAC-SHA256 signature verification
+                import hashlib
+                import hmac
+                import importlib.util
+
+                wh_path = os.path.join(old_cwd, "examples", "gcp", "cloud-run", "webhook.py")
+                self.assertTrue(os.path.isfile(wh_path))
+                spec = importlib.util.spec_from_file_location("gcp_webhook", wh_path)
+                wh_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(wh_mod)
+                payload_b = b'{"action":"queued"}'
+                good_sig = "sha256=" + hmac.new(b"s3cr3t", payload_b, hashlib.sha256).hexdigest()
+                self.assertTrue(wh_mod.verify_signature(payload_b, good_sig, secret=b"s3cr3t"))
+                self.assertFalse(wh_mod.verify_signature(payload_b, "sha256=deadbeef", secret=b"s3cr3t"))
+                self.assertFalse(wh_mod.verify_signature(payload_b, good_sig, secret=b""))
+                self.assertFalse(wh_mod.verify_signature(payload_b, "sha256=é", secret=b"s3cr3t"))
+                self.assertTrue(
+                    wh_mod.should_dispatch_job(
+                        "workflow_job",
+                        {"action": "queued", "workflow_job": {"labels": ["gcp-huggy"]}, "repository": {"private": True, "full_name": "HuggerHustle/platform-v2"}},
+                        required_label="gcp-huggy",
+                        allowed_repo="huggerhustle/platform-v2",
+                    )
+                )
+                # Public repos or mismatched repos are rejected by the dispatcher
+                self.assertFalse(
+                    wh_mod.should_dispatch_job(
+                        "workflow_job",
+                        {"action": "queued", "workflow_job": {"labels": ["gcp-huggy"]}, "repository": {"private": False, "full_name": "HuggerHustle/platform-v2"}},
+                        required_label="gcp-huggy",
+                        allowed_repo="HuggerHustle/platform-v2",
+                    )
+                )
             finally:
                 run_review.invoke_pi = old_invoke
                 os.chdir(old_cwd)
