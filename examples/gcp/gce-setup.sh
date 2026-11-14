@@ -48,14 +48,20 @@ curl -fsSL -o "$TARBALL" "https://github.com/actions/runner/releases/download/v$
 
 for slot in 1 2 3; do
   dir="/opt/actions-runner/slot-${slot}"
-  mkdir -p "$dir"
+  mkdir -p "$dir" "$dir/_tmp"
   tar -xzf "$TARBALL" -C "$dir"
 done
 rm -f "$TARBALL"
 
 cat >/usr/local/bin/huggy-job-cleanup.sh <<'EOF'
 #!/usr/bin/env bash
-find /tmp -maxdepth 1 -user runner -mmin +5 -exec rm -rf {} + 2>/dev/null || true
+# Clean only this slot's isolated TMPDIR and finished RUNNER_TEMP (never shared /tmp across active slots)
+if [ -n "${TMPDIR:-}" ] && [[ "$TMPDIR" == /opt/actions-runner/slot-*/_tmp ]]; then
+  find "$TMPDIR" -mindepth 1 -delete 2>/dev/null || true
+fi
+if [ -n "${RUNNER_TEMP:-}" ] && [[ "$RUNNER_TEMP" == /opt/actions-runner/slot-* ]]; then
+  find "$RUNNER_TEMP" -mindepth 1 -delete 2>/dev/null || true
+fi
 EOF
 chmod +x /usr/local/bin/huggy-job-cleanup.sh
 chown -R runner:runner /opt/actions-runner
@@ -72,11 +78,12 @@ fi
 GH_URL="${1%/}"
 REG_TOKEN="$2"
 LABELS="${3:-gcp-huggy}"
-SLOTS="${HUGGY_RUNNER_SLOTS:-3}"
 GCP_PROJ=$(curl -fsSL -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/project/project-id 2>/dev/null || true)
 
-for slot in $(seq 1 "$SLOTS"); do
+for slot in 1 2 3; do
   dir="/opt/actions-runner/slot-${slot}"
+  mkdir -p "$dir/_tmp"
+  chown runner:runner "$dir/_tmp"
   name="$(hostname)-${slot}"
   cd "$dir"
   if [ -f .service ]; then
@@ -84,6 +91,7 @@ for slot in $(seq 1 "$SLOTS"); do
     ./svc.sh uninstall || true
   fi
   cat >"$dir/.env" <<ENVEOF
+TMPDIR=${dir}/_tmp
 RUNNER_TOOL_CACHE=/opt/actions-runner/_tool
 ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/huggy-job-cleanup.sh
 GOOGLE_CLOUD_PROJECT=${GCP_PROJ}
@@ -94,7 +102,7 @@ ENVEOF
   ./svc.sh install runner
   ./svc.sh start
 done
-echo "Registered ${SLOTS} runner slots with labels: [self-hosted, linux, x64, ${LABELS}]"
+echo "Registered 3 runner slots with labels: [self-hosted, linux, x64, ${LABELS}]"
 EOF
 chmod +x /usr/local/bin/register-huggy-runners
 

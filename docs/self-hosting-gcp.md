@@ -96,7 +96,8 @@ export REGION="us-west1"
 export REPO_URL="https://github.com/YOUR_ORG/YOUR_REPO"
 
 # 1. Build & push the ephemeral runner image to Artifact Registry
-gcloud artifacts repositories create huggy --repository-format=docker --location="$REGION" --project="$PROJECT_ID" || true
+gcloud artifacts repositories describe huggy --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1 \
+  || gcloud artifacts repositories create huggy --repository-format=docker --location="$REGION" --project="$PROJECT_ID"
 gcloud builds submit examples/gcp/cloud-run \
   --tag "${REGION}-docker.pkg.dev/${PROJECT_ID}/huggy/runner:latest" \
   --project="$PROJECT_ID"
@@ -104,6 +105,21 @@ gcloud builds submit examples/gcp/cloud-run \
 # 2. Store your fine-grained GitHub PAT (repo Administration: Read & Write) and Webhook Secret in Secret Manager
 printf '%s' "$GITHUB_RUNNER_PAT" | gcloud secrets create huggy-gh-runner-pat --data-file=- --project="$PROJECT_ID"
 printf '%s' "$GITHUB_WEBHOOK_SECRET" | gcloud secrets create huggy-gh-webhook-secret --data-file=- --project="$PROJECT_ID"
+
+# 2b. Create a least-privilege webhook SA and grant per-secret Secret Manager access
+gcloud iam service-accounts create huggy-webhook \
+  --display-name="Huggy Runner Webhook Dispatcher" \
+  --project="$PROJECT_ID"
+
+gcloud secrets add-iam-policy-binding huggy-gh-runner-pat \
+  --member="serviceAccount:pi-vertex@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project="$PROJECT_ID"
+
+gcloud secrets add-iam-policy-binding huggy-gh-webhook-secret \
+  --member="serviceAccount:huggy-webhook@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project="$PROJECT_ID"
 
 # 3. Create the Cloud Run Job (1 execution = 1 isolated ephemeral GitHub runner)
 gcloud run jobs create huggy-ephemeral-runner \
@@ -117,15 +133,23 @@ gcloud run jobs create huggy-ephemeral-runner \
   --set-env-vars="GH_REPO_URL=${REPO_URL},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global" \
   --set-secrets="GH_RUNNER_PAT=huggy-gh-runner-pat:latest"
 
+# Allow the webhook SA to invoke ONLY `huggy-ephemeral-runner`
+gcloud run jobs add-iam-policy-binding huggy-ephemeral-runner \
+  --region="$REGION" \
+  --project="$PROJECT_ID" \
+  --member="serviceAccount:huggy-webhook@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/run.developer"
+
 # 4. Deploy the scale-to-zero `workflow_job` webhook Cloud Run Service
 gcloud run deploy huggy-runner-webhook \
   --source=examples/gcp/cloud-run \
   --command="python3" --args="/app/webhook.py" \
   --region="$REGION" \
   --project="$PROJECT_ID" \
+  --service-account="huggy-webhook@${PROJECT_ID}.iam.gserviceaccount.com" \
   --cpu=1 --memory=256Mi --min-instances=0 --max-instances=5 \
   --allow-unauthenticated \
-  --set-env-vars="GCP_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},CLOUD_RUN_JOB=huggy-ephemeral-runner,REQUIRED_LABEL=gcp-huggy" \
+  --set-env-vars="GCP_PROJECT=${PROJECT_ID},GCP_REGION=${REGION},CLOUD_RUN_JOB=huggy-ephemeral-runner,REQUIRED_LABEL=gcp-huggy,ALLOWED_REPO=${REPO_URL#https://github.com/}" \
   --set-secrets="GITHUB_WEBHOOK_SECRET=huggy-gh-webhook-secret:latest"
 ```
 

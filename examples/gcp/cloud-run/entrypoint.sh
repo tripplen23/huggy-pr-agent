@@ -22,10 +22,6 @@ REG_TOKEN=$(curl -fsSL -X POST \
 unset GH_RUNNER_PAT
 
 RUNNER_NAME="huggy-cr-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-cleanup() {
-  ./config.sh remove --token "$REG_TOKEN" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
 
 ./config.sh \
   --unattended \
