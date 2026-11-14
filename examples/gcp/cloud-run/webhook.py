@@ -9,6 +9,8 @@ import http.server
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
 
 SECRET = (os.environ.get("GITHUB_WEBHOOK_SECRET") or "").encode("utf-8")
@@ -18,7 +20,10 @@ JOB_NAME = os.environ.get("CLOUD_RUN_JOB") or "huggy-ephemeral-runner"
 GH_REPO_URL = (os.environ.get("GH_REPO_URL") or "").strip().rstrip("/")
 GH_RUNNER_PAT = (os.environ.get("GH_RUNNER_PAT") or "").strip()
 REQUIRED_LABEL = os.environ.get("REQUIRED_LABEL") or "gcp-huggy"
-ALLOWED_REPO = (os.environ.get("ALLOWED_REPO") or "").strip().strip("/")
+ALLOWED_REPO = (
+    os.environ.get("ALLOWED_REPO")
+    or GH_REPO_URL.removeprefix("https://github.com/").removesuffix(".git")
+).strip().strip("/")
 
 
 def verify_signature(raw_body: bytes, sig_header: str, secret: bytes | None = None) -> bool:
@@ -58,7 +63,7 @@ def should_dispatch_job(
 
 
 def mint_runner_registration_token(repo_url: str = GH_REPO_URL, pat: str = GH_RUNNER_PAT) -> str:
-    path_part = repo_url.removeprefix("https://github.com/").strip("/")
+    path_part = repo_url.removeprefix("https://github.com/").removesuffix(".git").strip("/")
     api_url = (
         f"https://api.github.com/repos/{path_part}/actions/runners/registration-token"
         if "/" in path_part
@@ -74,7 +79,7 @@ def mint_runner_registration_token(repo_url: str = GH_REPO_URL, pat: str = GH_RU
             "User-Agent": "huggy-runner-webhook",
         },
     )
-    with urllib.request.urlopen(req, timeout=8) as resp:
+    with urllib.request.urlopen(req, timeout=3) as resp:
         tok = (json.loads(resp.read().decode("utf-8")) or {}).get("token") or ""
     if not tok:
         raise RuntimeError("GitHub returned an empty runner registration token")
@@ -86,31 +91,38 @@ def fetch_gcp_access_token() -> str:
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
         headers={"Metadata-Flavor": "Google"},
     )
-    with urllib.request.urlopen(req, timeout=5) as resp:
+    with urllib.request.urlopen(req, timeout=2) as resp:
         return json.loads(resp.read().decode("utf-8"))["access_token"]
 
 
-def trigger_cloud_run_job() -> int:
-    reg_token = mint_runner_registration_token()
-    gcp_token = fetch_gcp_access_token()
+def trigger_cloud_run_job(max_attempts: int = 2) -> int:
     url = f"https://run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs/{JOB_NAME}:run"
-    body = json.dumps(
-        {
-            "overrides": {
-                "containerOverrides": [
-                    {"env": [{"name": "GH_REG_TOKEN", "value": reg_token}]}
-                ]
-            }
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={"Authorization": f"Bearer {gcp_token}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        return resp.status
+    for attempt in range(max_attempts):
+        try:
+            reg_token = mint_runner_registration_token()
+            gcp_token = fetch_gcp_access_token()
+            body = json.dumps(
+                {
+                    "overrides": {
+                        "containerOverrides": [
+                            {"env": [{"name": "GH_REG_TOKEN", "value": reg_token}]}
+                        ]
+                    }
+                }
+            ).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                method="POST",
+                headers={"Authorization": f"Bearer {gcp_token}", "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                return resp.status
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 500, 502, 503, 504) or attempt + 1 == max_attempts:
+                raise
+            time.sleep(0.3)
+    return 500
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
