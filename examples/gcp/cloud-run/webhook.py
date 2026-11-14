@@ -20,10 +20,11 @@ JOB_NAME = os.environ.get("CLOUD_RUN_JOB") or "huggy-ephemeral-runner"
 GH_REPO_URL = (os.environ.get("GH_REPO_URL") or "").strip().rstrip("/")
 GH_RUNNER_PAT = (os.environ.get("GH_RUNNER_PAT") or "").strip()
 REQUIRED_LABEL = os.environ.get("REQUIRED_LABEL") or "gcp-huggy"
-ALLOWED_REPO = (
-    os.environ.get("ALLOWED_REPO")
-    or GH_REPO_URL.removeprefix("https://github.com/").removesuffix(".git")
-).strip().strip("/")
+def normalize_repo_path(raw: str) -> str:
+    return (raw or "").strip().rstrip("/").removeprefix("https://github.com/").removesuffix(".git").strip("/")
+
+
+ALLOWED_REPO = normalize_repo_path(os.environ.get("ALLOWED_REPO") or GH_REPO_URL)
 
 
 def verify_signature(raw_body: bytes, sig_header: str, secret: bytes | None = None) -> bool:
@@ -63,7 +64,7 @@ def should_dispatch_job(
 
 
 def mint_runner_registration_token(repo_url: str = GH_REPO_URL, pat: str = GH_RUNNER_PAT) -> str:
-    path_part = repo_url.removeprefix("https://github.com/").removesuffix(".git").strip("/")
+    path_part = normalize_repo_path(repo_url)
     api_url = (
         f"https://api.github.com/repos/{path_part}/actions/runners/registration-token"
         if "/" in path_part
@@ -118,8 +119,9 @@ def trigger_cloud_run_job(max_attempts: int = 2) -> int:
             )
             with urllib.request.urlopen(req, timeout=4) as resp:
                 return resp.status
-        except urllib.error.HTTPError as exc:
-            if exc.code not in (429, 500, 502, 503, 504) or attempt + 1 == max_attempts:
+        except urllib.error.URLError as exc:
+            code = getattr(exc, "code", None)
+            if code not in (None, 429, 500, 502, 503, 504) or attempt + 1 == max_attempts:
                 raise
             time.sleep(0.3)
     return 500

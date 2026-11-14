@@ -35,7 +35,7 @@ su - runner -c '
   set -euo pipefail
   mkdir -p "$HOME/.pi-cli/bin" "$HOME/.pi-cli/agent"
   ln -sf /usr/local/bin/rg "$HOME/.pi-cli/bin/rg"
-  npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@${HUGGY_PI_VERSION:-latest}"
+  npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit @earendil-works/pi-coding-agent@latest
   export PATH="$HOME/.pi-cli/bin:$HOME/.pi-cli/node_modules/.bin:$PATH"
   export PI_CODING_AGENT_DIR="$HOME/.pi-cli/agent"
   pi update --models || true

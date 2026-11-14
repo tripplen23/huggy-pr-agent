@@ -2,7 +2,7 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-    git jq curl ca-certificates gnupg tar unzip zstd build-essential \
+    git jq curl ca-certificates gnupg tar unzip zstd build-essential procps \
     python3 libssl3 zlib1g libkrb5-3 libicu-dev \
   && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
   && apt-get install -y -qq --no-install-recommends nodejs \
