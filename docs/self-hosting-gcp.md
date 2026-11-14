@@ -133,12 +133,12 @@ gcloud run jobs create huggy-ephemeral-runner \
   --service-account="pi-vertex@${PROJECT_ID}.iam.gserviceaccount.com" \
   --set-env-vars="GH_REPO_URL=${REPO_URL},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=global"
 
-# Allow the webhook SA to invoke ONLY `huggy-ephemeral-runner` (with container env overrides)
+# Allow the webhook SA to execute ONLY `huggy-ephemeral-runner` (with container env overrides, no image update rights)
 gcloud run jobs add-iam-policy-binding huggy-ephemeral-runner \
   --region="$REGION" \
   --project="$PROJECT_ID" \
   --member="serviceAccount:huggy-webhook@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/run.developer"
+  --role="roles/run.jobsExecutorWithOverrides"
 
 # 4. Deploy the scale-to-zero `workflow_job` webhook Cloud Run Service
 gcloud run deploy huggy-runner-webhook \

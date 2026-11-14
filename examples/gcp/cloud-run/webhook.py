@@ -119,7 +119,7 @@ def trigger_cloud_run_job(max_attempts: int = 2) -> int:
             )
             with urllib.request.urlopen(req, timeout=4) as resp:
                 return resp.status
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, OSError) as exc:
             code = getattr(exc, "code", None)
             if code not in (None, 429, 500, 502, 503, 504) or attempt + 1 == max_attempts:
                 raise

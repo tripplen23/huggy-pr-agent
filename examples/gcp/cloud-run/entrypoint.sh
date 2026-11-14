@@ -29,4 +29,4 @@ unset GH_REG_TOKEN
   fi
 ) &
 
-exec ./run.sh
+exec env -u GH_REG_TOKEN ./run.sh
