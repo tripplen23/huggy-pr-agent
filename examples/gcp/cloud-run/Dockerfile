@@ -14,7 +14,8 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 
 RUN useradd -m -s /bin/bash runner && mkdir -p /runner /app && chown -R runner:runner /runner
 
-ARG RUNNER_VERSION=2.322.0
+ARG RUNNER_VERSION=2.338.2
+ARG PI_VERSION=latest
 RUN curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
     | tar -xz -C /runner \
   && chown -R runner:runner /runner
@@ -26,7 +27,7 @@ RUN chmod +x /app/entrypoint.sh /app/webhook.py
 USER runner
 RUN mkdir -p "$HOME/.pi-cli/bin" "$HOME/.pi-cli/agent" \
   && ln -sf /usr/local/bin/rg "$HOME/.pi-cli/bin/rg" \
-  && npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit @earendil-works/pi-coding-agent@latest
+  && npm i --prefix "$HOME/.pi-cli" --no-fund --no-audit "@earendil-works/pi-coding-agent@${PI_VERSION}"
 
 WORKDIR /runner
 ENTRYPOINT ["/app/entrypoint.sh"]

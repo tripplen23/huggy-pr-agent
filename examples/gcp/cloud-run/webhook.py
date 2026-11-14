@@ -9,14 +9,14 @@ import http.server
 import json
 import os
 import sys
-import time
-import urllib.error
 import urllib.request
 
 SECRET = (os.environ.get("GITHUB_WEBHOOK_SECRET") or "").encode("utf-8")
 PROJECT = os.environ.get("GCP_PROJECT") or ""
 REGION = os.environ.get("GCP_REGION") or "us-west1"
 JOB_NAME = os.environ.get("CLOUD_RUN_JOB") or "huggy-ephemeral-runner"
+GH_REPO_URL = (os.environ.get("GH_REPO_URL") or "").strip().rstrip("/")
+GH_RUNNER_PAT = (os.environ.get("GH_RUNNER_PAT") or "").strip()
 REQUIRED_LABEL = os.environ.get("REQUIRED_LABEL") or "gcp-huggy"
 ALLOWED_REPO = (os.environ.get("ALLOWED_REPO") or "").strip().strip("/")
 
@@ -26,7 +26,59 @@ def verify_signature(raw_body: bytes, sig_header: str, secret: bytes | None = No
     if not key or not sig_header.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(key, raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig_header)
+    try:
+        return hmac.compare_digest(expected, sig_header)
+    except TypeError:
+        return False
+
+
+def should_dispatch_job(
+    event: str,
+    payload: dict,
+    required_label: str = REQUIRED_LABEL,
+    allowed_repo: str = ALLOWED_REPO,
+) -> bool:
+    if event != "workflow_job" or payload.get("action") != "queued":
+        return False
+    labels = (payload.get("workflow_job") or {}).get("labels") or []
+    if required_label not in labels:
+        return False
+    repo = payload.get("repository") or {}
+    full_name = (repo.get("full_name") or "").strip()
+    if not repo.get("private"):
+        sys.stderr.write(f"Skipping non-private repository {full_name}\n")
+        return False
+    if allowed_repo:
+        allowed = allowed_repo.casefold()
+        fn_fold = full_name.casefold()
+        if ("/" in allowed and fn_fold != allowed) or ("/" not in allowed and not fn_fold.startswith(f"{allowed}/")):
+            sys.stderr.write(f"Skipping {full_name} (not matching ALLOWED_REPO={allowed_repo})\n")
+            return False
+    return True
+
+
+def mint_runner_registration_token(repo_url: str = GH_REPO_URL, pat: str = GH_RUNNER_PAT) -> str:
+    path_part = repo_url.removeprefix("https://github.com/").strip("/")
+    api_url = (
+        f"https://api.github.com/repos/{path_part}/actions/runners/registration-token"
+        if "/" in path_part
+        else f"https://api.github.com/orgs/{path_part}/actions/runners/registration-token"
+    )
+    req = urllib.request.Request(
+        api_url,
+        data=b"",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {pat}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "huggy-runner-webhook",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        tok = (json.loads(resp.read().decode("utf-8")) or {}).get("token") or ""
+    if not tok:
+        raise RuntimeError("GitHub returned an empty runner registration token")
+    return tok
 
 
 def fetch_gcp_access_token() -> str:
@@ -38,51 +90,32 @@ def fetch_gcp_access_token() -> str:
         return json.loads(resp.read().decode("utf-8"))["access_token"]
 
 
-def should_dispatch_job(event: str, payload: dict, required_label: str = REQUIRED_LABEL, allowed_repo: str = ALLOWED_REPO) -> bool:
-    if event != "workflow_job" or payload.get("action") != "queued":
-        return False
-    labels = (payload.get("workflow_job") or {}).get("labels") or []
-    if required_label not in labels:
-        return False
-    repo = payload.get("repository") or {}
-    if not repo.get("private"):
-        return False
-    full_name = (repo.get("full_name") or "").strip()
-    if allowed_repo:
-        if "/" in allowed_repo and full_name != allowed_repo:
-            return False
-        if "/" not in allowed_repo and not full_name.startswith(f"{allowed_repo}/"):
-            return False
-    return True
-
-
-def trigger_cloud_run_job(max_attempts: int = 3) -> int:
-    last_exc: Exception | None = None
-    for attempt in range(max_attempts):
-        try:
-            token = fetch_gcp_access_token()
-            url = f"https://run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs/{JOB_NAME}:run"
-            req = urllib.request.Request(
-                url,
-                data=b"{}",
-                method="POST",
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return resp.status
-        except urllib.error.HTTPError as exc:
-            last_exc = exc
-            if exc.code not in (429, 500, 502, 503, 504) or attempt + 1 == max_attempts:
-                raise
-        except urllib.error.URLError as exc:
-            last_exc = exc
-            if attempt + 1 == max_attempts:
-                raise
-        time.sleep(0.6 * (attempt + 1))
-    raise RuntimeError(f"Exhausted retries: {last_exc}")
+def trigger_cloud_run_job() -> int:
+    reg_token = mint_runner_registration_token()
+    gcp_token = fetch_gcp_access_token()
+    url = f"https://run.googleapis.com/v2/projects/{PROJECT}/locations/{REGION}/jobs/{JOB_NAME}:run"
+    body = json.dumps(
+        {
+            "overrides": {
+                "containerOverrides": [
+                    {"env": [{"name": "GH_REG_TOKEN", "value": reg_token}]}
+                ]
+            }
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Authorization": f"Bearer {gcp_token}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        return resp.status
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    timeout = 10
+
     def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length") or "0")
@@ -131,8 +164,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    if not SECRET or not PROJECT:
-        sys.stderr.write("GITHUB_WEBHOOK_SECRET and GCP_PROJECT must be set\n")
+    if not SECRET or not PROJECT or not GH_REPO_URL or not GH_RUNNER_PAT:
+        sys.stderr.write("GITHUB_WEBHOOK_SECRET, GCP_PROJECT, GH_REPO_URL, and GH_RUNNER_PAT must be set\n")
         sys.exit(1)
     port = int(os.environ.get("PORT") or "8080")
     http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

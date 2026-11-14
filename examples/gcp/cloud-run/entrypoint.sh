@@ -1,26 +1,12 @@
 #!/usr/bin/env bash
 # Ephemeral 1-job GitHub Actions Runner entrypoint for Google Cloud Run Jobs.
+# Receives a short-lived single-use GH_REG_TOKEN minted by webhook.py (never holds GH_RUNNER_PAT).
 set -euo pipefail
 
 : "${GH_REPO_URL:?GH_REPO_URL is required (e.g. https://github.com/OWNER/REPO or https://github.com/ORG)}"
-: "${GH_RUNNER_PAT:?GH_RUNNER_PAT is required (fine-grained PAT with Administration: Read & Write)}"
+: "${GH_REG_TOKEN:?GH_REG_TOKEN is required (minted per execution by webhook.py)}"
 
 TRIMMED="${GH_REPO_URL%/}"
-PATH_PART="${TRIMMED#https://github.com/}"
-if [[ "$PATH_PART" == */* ]]; then
-  TOKEN_API="https://api.github.com/repos/${PATH_PART}/actions/runners/registration-token"
-else
-  TOKEN_API="https://api.github.com/orgs/${PATH_PART}/actions/runners/registration-token"
-fi
-
-REG_TOKEN=$(curl -fsSL -X POST \
-  -H "Authorization: Bearer ${GH_RUNNER_PAT}" \
-  -H "Accept: application/vnd.github+json" \
-  "$TOKEN_API" | jq -r '.token')
-
-[ -n "$REG_TOKEN" ] && [ "$REG_TOKEN" != "null" ] || { echo "Failed to mint runner registration token" >&2; exit 1; }
-unset GH_RUNNER_PAT
-
 RUNNER_NAME="huggy-cr-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
 ./config.sh \
@@ -28,9 +14,19 @@ RUNNER_NAME="huggy-cr-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   --ephemeral \
   --replace \
   --url "$TRIMMED" \
-  --token "$REG_TOKEN" \
+  --token "$GH_REG_TOKEN" \
   --name "$RUNNER_NAME" \
   --labels "${RUNNER_LABELS:-gcp-huggy}" \
   --work "_work"
+unset GH_REG_TOKEN
+
+# Bound idle wait: if the queued job was cancelled before boot, exit after 180s instead of idling 95m
+(
+  sleep "${IDLE_PICKUP_TIMEOUT_SEC:-180}"
+  if ! pgrep -f "Runner.Worker" >/dev/null 2>&1; then
+    echo "No job claimed within idle timeout; shutting down ephemeral runner." >&2
+    pkill -TERM -f "Runner.Listener" || true
+  fi
+) &
 
 exec ./run.sh

@@ -15,7 +15,7 @@ apt-get install -y -qq \
   git jq curl ca-certificates gnupg tar unzip zstd build-essential \
   python3 libssl3 zlib1g libkrb5-3 libicu-dev
 
-if ! command -v node >/dev/null 2>&1; then
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
   apt-get install -y -qq nodejs
 fi
@@ -41,7 +41,7 @@ su - runner -c '
   pi update --models || true
 '
 
-RUNNER_VER=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name | ltrimstr("v")')
+RUNNER_VER="${HUGGY_RUNNER_VERSION:-2.338.2}"
 mkdir -p /opt/actions-runner/_tool
 TARBALL="/tmp/actions-runner-linux-x64-${RUNNER_VER}.tar.gz"
 curl -fsSL -o "$TARBALL" "https://github.com/actions/runner/releases/download/v${RUNNER_VER}/actions-runner-linux-x64-${RUNNER_VER}.tar.gz"

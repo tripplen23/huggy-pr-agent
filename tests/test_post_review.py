@@ -1255,12 +1255,13 @@ const count = 1;
                 self.assertTrue(wh_mod.verify_signature(payload_b, good_sig, secret=b"s3cr3t"))
                 self.assertFalse(wh_mod.verify_signature(payload_b, "sha256=deadbeef", secret=b"s3cr3t"))
                 self.assertFalse(wh_mod.verify_signature(payload_b, good_sig, secret=b""))
+                self.assertFalse(wh_mod.verify_signature(payload_b, "sha256=é", secret=b"s3cr3t"))
                 self.assertTrue(
                     wh_mod.should_dispatch_job(
                         "workflow_job",
                         {"action": "queued", "workflow_job": {"labels": ["gcp-huggy"]}, "repository": {"private": True, "full_name": "HuggerHustle/platform-v2"}},
                         required_label="gcp-huggy",
-                        allowed_repo="HuggerHustle/platform-v2",
+                        allowed_repo="huggerhustle/platform-v2",
                     )
                 )
                 # Public repos or mismatched repos are rejected by the dispatcher
