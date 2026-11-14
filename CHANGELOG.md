@@ -2,6 +2,11 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.12.0] - 2026-11-14
+
+### Added
+- **Google Cloud Self-Hosting Guides & Turnkey Templates (`docs/self-hosting-gcp.md`, `examples/gcp/`)**: documents and ships ready-to-run templates for both **Option A (Dedicated GCE VM Multi-Slot Runner, `examples/gcp/gce-setup.sh`)** and **Option B (Serverless Scale-to-Zero Ephemeral Runners on Cloud Run Jobs, `examples/gcp/cloud-run/`)** — keeping GitHub-hosted `runs-on: ubuntu-latest` as the zero-config default while letting high-volume private orgs eliminate GitHub Actions minute usage on GCP Startup Credits with a 1-line `runs-on:` switch.
+
 ## [1.11.1] - 2026-11-13
 
 ### Fixed

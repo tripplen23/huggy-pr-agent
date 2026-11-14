@@ -15,7 +15,7 @@
 [![Release](https://img.shields.io/github/v/release/tripplen23/huggy-pr-agent?color=ffcc4d&label=release)](https://github.com/tripplen23/huggy-pr-agent/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[Quick Start](#quick-start) · [Providers & Vertex AI](#model-providers--google-vertex-ai) · [Commands](#commands--capabilities) · [How It Works](#how-it-works) · [Configuration](#configuration--inputs) · [Agent Install Spec](https://github.com/tripplen23/huggy-pr-agent/blob/main/INSTALL.md)
+[Quick Start](#quick-start) · [Providers & Vertex AI](#model-providers--google-vertex-ai) · [Self-Host on GCP](https://github.com/tripplen23/huggy-pr-agent/blob/main/docs/self-hosting-gcp.md) · [Commands](#commands--capabilities) · [How It Works](#how-it-works) · [Configuration](#configuration--inputs) · [Agent Install Spec](https://github.com/tripplen23/huggy-pr-agent/blob/main/INSTALL.md)
 
 </div>
 
@@ -146,7 +146,7 @@ jobs:
 - **Interactive comment commands (`issue_comment`, `pull_request_review_comment`)** activate as soon as `.github/workflows/huggy.yml` lands on your default branch.
 - **Staying in sync with upstream updates:**
   - **Zero-click automatic updates:** Referencing `tripplen23/huggy-pr-agent@v1` automatically picks up every engine, Judge, and prompt improvement as soon as a new `v1.x` release ships.
-  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.11.1` and drop [`examples/dependabot.yml`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
+  - **1-click PR approval updates:** Prefer explicit version review before upgrading? Pin `uses: tripplen23/huggy-pr-agent@v1.12.0` and drop [`examples/dependabot.yml`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/dependabot.yml) into `.github/dependabot.yml` (or use Renovate) — GitHub opens a 1-click Merge PR with full release notes whenever a new version is published.
   - **Local Pi package updates:** Run `pi update --extensions` (and `/huggy sync` inside any repo to refresh workflow templates).
 
 ---
@@ -179,7 +179,13 @@ By default, `huggy-pr-agent` uses `opencode-go/deepseek-v4.1-flash` with `openco
        api_key: ${{ secrets.OPENCODE_GO_KEY }}
        max_parallel_bundles: "2"
    ```
-   See [`examples/google-vertex.yml`](examples/google-vertex.yml) for a full workflow file.
+   See [`examples/google-vertex.yml`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/google-vertex.yml) for a full workflow file.
+
+### Zero GitHub Actions Minutes on GCP (Optional Self-Hosted Runners)
+
+GitHub-hosted `runs-on: ubuntu-latest` is the default and requires zero infrastructure. If your private organization hits GitHub's 2,000 included Actions minutes/month, see **[`docs/self-hosting-gcp.md`](https://github.com/tripplen23/huggy-pr-agent/blob/main/docs/self-hosting-gcp.md)** for two turnkey Google Cloud options (both 100% Google for Startups Cloud Credit eligible, requiring only a 1-line `runs-on: [self-hosted, gcp-huggy]` change):
+- **Option A — Dedicated GCE VM Multi-Slot Runner** ([`examples/gcp/gce-setup.sh`](https://github.com/tripplen23/huggy-pr-agent/blob/main/examples/gcp/gce-setup.sh)): 0s cold-start and warm SSD caches across 3 concurrent runner slots.
+- **Option B — Serverless Ephemeral Runners on Cloud Run Jobs** ([`examples/gcp/cloud-run/`](https://github.com/tripplen23/huggy-pr-agent/tree/main/examples/gcp/cloud-run)): isolated `--ephemeral` container per job that scales down to 0 when idle.
 
 ---
 

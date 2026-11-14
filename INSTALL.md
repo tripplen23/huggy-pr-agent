@@ -140,3 +140,5 @@ jobs:
    - Automatic inline review on every PR push
    - `@huggy <instruction>` (or `@pi <instruction>` / `/fix <instruction>`) on any diff line or PR comment to push a verified fix and auto-resolve the review thread
    - `/describe`, `/improve`, `/ask <question>`, `/review`
+
+> **Optional — Zero GitHub Actions Minutes on GCP (Private Orgs Only):** Keep `runs-on: ubuntu-latest` by default. If the user explicitly asks to run on Google Cloud / self-hosted runners to save private-org Actions minutes, follow [`docs/self-hosting-gcp.md`](https://github.com/tripplen23/huggy-pr-agent/blob/main/docs/self-hosting-gcp.md) (Option A: GCE VM via `examples/gcp/gce-setup.sh`, or Option B: Serverless Ephemeral Cloud Run Jobs via `examples/gcp/cloud-run/`).

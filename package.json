@@ -1,6 +1,6 @@
 {
   "name": "huggy-pr-agent",
-  "version": "1.11.1",
+  "version": "1.12.0",
   "description": "Repository-aware PR code reviews, 1-click commit suggestions, and test-gated @huggy auto-fixes — as a GitHub Action, Pi Package, and cross-harness Agent Skill.",
   "license": "MIT",
   "author": "Binh Duc Nguyen",
@@ -22,10 +22,12 @@
   ],
   "files": [
     "action.yml",
+    "AGENTS.md",
     "INSTALL.md",
     "CHANGELOG.md",
     "README.md",
     "LICENSE",
+    "docs",
     "extensions",
     "skills",
     "pi-prompts",
