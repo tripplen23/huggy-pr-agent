@@ -571,7 +571,8 @@ def submit_inline_comments(
             if isinstance(exc, urllib.error.HTTPError)
             else str(exc)
         )
-        if len(inline) <= 1:
+        validation_rejected = isinstance(exc, urllib.error.HTTPError) and exc.code == 422
+        if len(inline) <= 1 or not validation_rejected:
             sys.stderr.write(f"warning: inline review POST failed ({err_detail}); demoting to sticky\n")
             return 0, [summary for _, summary in inline]
         sys.stderr.write(

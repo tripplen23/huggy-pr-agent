@@ -1292,15 +1292,27 @@ const count = 1;
 
 
     def test_submit_inline_comments_pins_commit_id_and_isolates_422_item(self) -> None:
+        import io
+        import urllib.error
+
         calls: list[dict] = []
         sha40 = "5c28210e35d829af390422fa93d9a389339a0f51"
+
+        def make_422() -> urllib.error.HTTPError:
+            return urllib.error.HTTPError(
+                "https://api.github.com/repos/HuggerHustle/platform-v2/pulls/426/reviews",
+                422,
+                "Unprocessable Entity",
+                {},
+                io.BytesIO(b'{"message":"Line could not be resolved"}'),
+            )
 
         def fake_api(method: str, url: str, payload: dict):
             calls.append(payload)
             if len(payload["comments"]) > 1:
-                raise RuntimeError("422 Line could not be resolved")
+                raise make_422()
             if payload["comments"][0]["line"] == 848:
-                raise RuntimeError("422 Line could not be resolved")
+                raise make_422()
             return {"id": 1}
 
         inline = [
@@ -1313,8 +1325,30 @@ const count = 1;
         self.assertEqual(demoted, ["summary-bad"])
         self.assertTrue(all(c.get("commit_id") == sha40 for c in calls))
 
+        # Non-422 errors (e.g. network TimeoutError) must NOT retry individually (avoids duplicate comments)
+        timeout_calls: list[dict] = []
+
+        def timeout_api(method: str, url: str, payload: dict):
+            timeout_calls.append(payload)
+            raise TimeoutError("read timed out")
+
+        p2, d2 = post_review.submit_inline_comments("HuggerHustle/platform-v2", 426, sha40, inline[:2], timeout_api)
+        self.assertEqual(p2, 0)
+        self.assertEqual(d2, ["summary-ok1", "summary-bad"])
+        self.assertEqual(len(timeout_calls), 1)
+
+        # Single-batch success and missing/short HEAD_SHA omits commit_id
+        ok_calls: list[dict] = []
+        p3, d3 = post_review.submit_inline_comments(
+            "HuggerHustle/platform-v2", 426, "", inline[:1], lambda m, u, pl: ok_calls.append(pl)
+        )
+        self.assertEqual((p3, d3), (1, []))
+        self.assertEqual(len(ok_calls), 1)
+        self.assertNotIn("commit_id", ok_calls[0])
+
         # Action review mode checks out pull_request.head.sha (never the synthetic merge commit)
-        action_yml = open("action.yml", encoding="utf-8").read()
+        with open("action.yml", encoding="utf-8") as afh:
+            action_yml = afh.read()
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", action_yml)
         self.assertNotIn("Checkout PR merge ref", action_yml)
 

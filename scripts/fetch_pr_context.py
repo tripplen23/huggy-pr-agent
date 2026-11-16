@@ -220,6 +220,23 @@ def parse_gitattributes_generated(gitattributes_text: str) -> list[dict]:
     return rules
 
 
+def resolve_trusted_base_ref() -> str:
+    """Prefer `base-tip` (latest target branch tip) for trusted policy/gitattributes when present."""
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "base-tip"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return "base-tip"
+    except Exception:
+        pass
+    return "base"
+
+
 def load_base_git_file(path: str, base_ref: str = "base") -> str:
     try:
         return subprocess.check_output(
@@ -1069,9 +1086,10 @@ def main() -> int:
             "User-Agent": "pi-pr-agent",
         },
     )
-    gitattributes_globs = parse_gitattributes_generated(load_base_git_file(".gitattributes"))
+    trusted_ref = resolve_trusted_base_ref()
+    gitattributes_globs = parse_gitattributes_generated(load_base_git_file(".gitattributes", base_ref=trusted_ref))
     changed_paths = [f["path"] for f in parse_annotated_files(diff_text, gitattributes_globs)] if diff_text else []
-    scoped_rules_md = collect_scoped_rules(changed_paths)
+    scoped_rules_md = collect_scoped_rules(changed_paths, base_ref=trusted_ref)
     scoped_rules_path = os.path.join(temp, "scoped-rules.md")
     with open(scoped_rules_path, "w", encoding="utf-8") as sfh:
         sfh.write(scoped_rules_md)
