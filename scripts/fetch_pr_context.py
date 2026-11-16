@@ -220,10 +220,28 @@ def parse_gitattributes_generated(gitattributes_text: str) -> list[dict]:
     return rules
 
 
-def load_base_git_file(path: str, base_ref: str = "base") -> str:
+def resolve_trusted_base_ref() -> str:
+    """Prefer `base-tip` (latest target branch tip) for trusted policy/gitattributes when present."""
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "base-tip"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return "base-tip"
+    except Exception:
+        pass
+    return "base"
+
+
+def load_base_git_file(path: str, base_ref: str | None = None) -> str:
+    ref = base_ref or resolve_trusted_base_ref()
     try:
         return subprocess.check_output(
-            ["git", "show", f"{base_ref}:{path}"],
+            ["git", "show", f"{ref}:{path}"],
             text=True,
             stderr=subprocess.DEVNULL,
         )
@@ -256,7 +274,7 @@ def parse_instructions_frontmatter(text: str) -> tuple[list[str], str, str]:
 def collect_scoped_rules(
     changed_paths: list[str],
     base_files: dict[str, str] | None = None,
-    base_ref: str = "base",
+    base_ref: str | None = None,
     max_chars: int = 24000,
 ) -> str:
     """Resolve base-branch `REVIEW.md`, `.github/copilot-instructions.md`, ancestor `AGENTS.md`/`CLAUDE.md`,
@@ -268,16 +286,17 @@ def collect_scoped_rules(
         all_base_paths = set(base_files.keys())
         read_fn = lambda p: base_files.get(p, "")
     else:
+        resolved_ref = base_ref or resolve_trusted_base_ref()
         try:
             tree_out = subprocess.check_output(
-                ["git", "ls-tree", "-r", "--name-only", base_ref],
+                ["git", "ls-tree", "-r", "--name-only", resolved_ref],
                 text=True,
                 stderr=subprocess.DEVNULL,
             )
             all_base_paths = {ln.strip() for ln in tree_out.splitlines() if ln.strip()}
         except Exception:
             return ""
-        read_fn = lambda p: load_base_git_file(p, base_ref=base_ref)
+        read_fn = lambda p: load_base_git_file(p, base_ref=resolved_ref)
 
     sections: list[str] = []
     used_chars = 0
@@ -982,15 +1001,9 @@ def format_pr_context(
 def compute_incremental_diff(last_sha: str) -> str:
     """Return `git diff <last_sha> <PR head>` if last_sha is a reachable commit distinct from the PR head."""
     try:
-        parents = subprocess.check_output(
-            ["git", "rev-list", "--parents", "-n", "1", "HEAD"], text=True, stderr=subprocess.DEVNULL
-        ).split()
-        if len(parents) >= 3:
-            head_sha = parents[-1]
-        else:
-            head_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
-            ).strip()
+        head_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
         if head_sha.startswith(last_sha) or last_sha.startswith(head_sha[:7]):
             return ""
         if subprocess.call(["git", "cat-file", "-e", f"{last_sha}^{{commit}}"], stderr=subprocess.DEVNULL) != 0:
@@ -1032,7 +1045,7 @@ def compute_incremental_diff(last_sha: str) -> str:
             ["git", "-c", "core.quotePath=false", "diff", last_sha, head_sha],
             text=True,
             stderr=subprocess.DEVNULL,
-            env={**os.environ, "GIT_ATTR_SOURCE": "base"},
+            env={**os.environ, "GIT_ATTR_SOURCE": resolve_trusted_base_ref()},
         )
     except Exception:
         return ""
@@ -1069,9 +1082,10 @@ def main() -> int:
             "User-Agent": "pi-pr-agent",
         },
     )
-    gitattributes_globs = parse_gitattributes_generated(load_base_git_file(".gitattributes"))
+    trusted_ref = resolve_trusted_base_ref()
+    gitattributes_globs = parse_gitattributes_generated(load_base_git_file(".gitattributes", base_ref=trusted_ref))
     changed_paths = [f["path"] for f in parse_annotated_files(diff_text, gitattributes_globs)] if diff_text else []
-    scoped_rules_md = collect_scoped_rules(changed_paths)
+    scoped_rules_md = collect_scoped_rules(changed_paths, base_ref=trusted_ref)
     scoped_rules_path = os.path.join(temp, "scoped-rules.md")
     with open(scoped_rules_path, "w", encoding="utf-8") as sfh:
         sfh.write(scoped_rules_md)

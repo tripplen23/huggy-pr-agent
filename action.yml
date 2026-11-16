@@ -161,11 +161,12 @@ runs:
         fi
         echo "go=true" >> "$GITHUB_OUTPUT"
 
-    - name: Checkout PR merge ref (review)
+    - name: Checkout PR head ref (review)
       if: steps.gate_review.outputs.go == 'true'
       uses: actions/checkout@v4
       with:
-        fetch-depth: 2
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 100
         persist-credentials: false
         token: ${{ inputs.github_token }}
 
@@ -188,32 +189,35 @@ runs:
         cp -R "$ACTION_PATH/scripts" "$ACTION_PATH/prompts" "$RUNNER_TEMP/pi-action/"
 
         git_basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')
-        if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
-          git branch -f base "HEAD^1"
-        else
+        git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $git_basic" \
+          fetch --no-tags --depth=100 "$SERVER/$REPO.git" \
+          "+refs/heads/$TARGET:refs/heads/base-tip"
+        mb=$(git merge-base base-tip HEAD 2>/dev/null || true)
+        if [ -z "$mb" ]; then
+          shallow_flag=""
+          [ -f "$(git rev-parse --git-dir)/shallow" ] && shallow_flag="--unshallow"
           git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $git_basic" \
-            fetch --no-tags --depth=100 "$SERVER/$REPO.git" \
-            "+refs/heads/$TARGET:refs/remotes/base" "+refs/pull/$PR/head:refs/remotes/pr-head"
-          git checkout -q refs/remotes/pr-head
-          mb=$(git merge-base refs/remotes/base refs/remotes/pr-head 2>/dev/null || true)
+            fetch --no-tags $shallow_flag "$SERVER/$REPO.git" \
+            "+refs/pull/$PR/head:refs/remotes/pr-head" "+refs/heads/$TARGET:refs/heads/base-tip"
+          mb=$(git merge-base base-tip HEAD 2>/dev/null || true)
           if [ -z "$mb" ]; then
-            echo "no merge base within 100 commits; refusing to review an inverted diff" >&2
+            echo "no merge base between $TARGET and HEAD; refusing to review an inverted diff" >&2
             exit 1
           fi
-          git branch -f base "$mb"
         fi
-        echo "base = $(git rev-parse --short base)"
+        git branch -f base "$mb"
+        echo "base = $(git rev-parse --short base) (tip = $(git rev-parse --short base-tip), head = $(git rev-parse --short HEAD))"
 
-        if git cat-file -e "base:$RUBRIC_FILE" 2>/dev/null; then
-          git show "base:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
-        elif git cat-file -e "base:CLAUDE.md" 2>/dev/null; then
-          git show "base:CLAUDE.md" > "$RUNNER_TEMP/rubric.md"
+        if git cat-file -e "base-tip:$RUBRIC_FILE" 2>/dev/null; then
+          git show "base-tip:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
+        elif git cat-file -e "base-tip:CLAUDE.md" 2>/dev/null; then
+          git show "base-tip:CLAUDE.md" > "$RUNNER_TEMP/rubric.md"
         else
           : > "$RUNNER_TEMP/rubric.md"
         fi
 
-        if git cat-file -e "base:.github/pi-review-prompt.md" 2>/dev/null; then
-          git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief-template.md"
+        if git cat-file -e "base-tip:.github/pi-review-prompt.md" 2>/dev/null; then
+          git show "base-tip:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief-template.md"
         else
           cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief-template.md"
         fi
@@ -221,7 +225,7 @@ runs:
           printf '\n\nAdditional repository instructions:\n%s\n' "$EXTRA_INSTRUCTIONS" >> "$RUNNER_TEMP/brief-template.md"
         fi
 
-        GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        GIT_ATTR_SOURCE=base-tip git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
         # Scrub checkout token from .git/config and FETCH_HEAD before the Pi step runs
@@ -312,7 +316,7 @@ runs:
         open("review.md", "w", encoding="utf-8").write("\n".join(lines) + "\n")
         '
         fi
-        GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        GIT_ATTR_SOURCE=base-tip git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
 
     - name: Replace a stale verdict when review fails

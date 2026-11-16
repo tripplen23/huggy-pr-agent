@@ -543,6 +543,61 @@ def partition_findings_by_profile(findings: list[dict], profile: str = "chill") 
     return inline_cands, nitpicks
 
 
+def submit_inline_comments(
+    repo: str,
+    pr: str | int,
+    head_sha: str,
+    inline: list[tuple[dict, str]],
+    api_fn,
+) -> tuple[int, list[str]]:
+    """Publish inline PR review comments pinned to head_sha; isolate any failing item if a batch POST 422s."""
+    if not inline:
+        return 0, []
+
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr}/reviews"
+
+    def _build_payload(items: list[dict]) -> dict:
+        payload: dict = {"event": "COMMENT", "comments": items}
+        if len(head_sha) == 40 and all(c in "0123456789abcdefABCDEF" for c in head_sha):
+            payload["commit_id"] = head_sha
+        return payload
+
+    try:
+        api_fn("POST", url, _build_payload([item for item, _ in inline]))
+        return len(inline), []
+    except Exception as exc:
+        err_detail = (
+            exc.read().decode("utf-8", errors="replace")
+            if isinstance(exc, urllib.error.HTTPError)
+            else str(exc)
+        )
+        validation_rejected = isinstance(exc, urllib.error.HTTPError) and exc.code == 422
+        if len(inline) <= 1 or not validation_rejected:
+            sys.stderr.write(f"warning: inline review POST failed ({err_detail}); demoting to sticky\n")
+            return 0, [summary for _, summary in inline]
+        sys.stderr.write(
+            f"warning: batch inline review POST failed ({err_detail}); retrying {len(inline)} comment(s) individually\n"
+        )
+
+    posted = 0
+    demoted: list[str] = []
+    for item, summary in inline:
+        try:
+            api_fn("POST", url, _build_payload([item]))
+            posted += 1
+        except Exception as item_exc:
+            item_err = (
+                item_exc.read().decode("utf-8", errors="replace")
+                if isinstance(item_exc, urllib.error.HTTPError)
+                else str(item_exc)
+            )
+            sys.stderr.write(
+                f"warning: inline comment on {item.get('path')}:{item.get('line')} failed ({item_err}); demoting to sticky\n"
+            )
+            demoted.append(summary)
+    return posted, demoted
+
+
 def main() -> int:
     repo = os.environ["REPO"]
     owner, name = repo.split("/", 1)
@@ -703,25 +758,10 @@ def main() -> int:
             item["start_side"] = "RIGHT"
         inline.append((item, f["summary"]))
 
-    posted_inline = 0
-    if inline:
-        try:
-            api(
-                "POST",
-                f"https://api.github.com/repos/{repo}/pulls/{pr}/reviews",
-                {"event": "COMMENT", "comments": [item for item, _ in inline]},
-            )
-            posted_inline = len(inline)
-        except Exception as exc:
-            err_detail = (
-                exc.read().decode("utf-8", errors="replace")
-                if isinstance(exc, urllib.error.HTTPError)
-                else str(exc)
-            )
-            sys.stderr.write(f"warning: inline review POST failed ({err_detail}); demoting to sticky\n")
-            fallback.extend(summary for _, summary in inline)
-
     head_sha = (os.environ.get("HEAD_SHA") or "").strip()[:40]
+    posted_inline, demoted_inline = submit_inline_comments(repo, pr, head_sha, inline, api)
+    fallback.extend(demoted_inline)
+
     sticky_marker = f"<!-- pi-review sha={head_sha} -->" if head_sha else MARKER
     dyn_heading, styled_verdict = build_verdict_presentation(verdict_line, findings, intro_lines)
     body_parts = [sticky_marker, dyn_heading, "", styled_verdict]
