@@ -2,10 +2,15 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.12.2] - 2026-11-16
+
+### Fixed
+- **Exact `head.sha` Line Resolution When Target Branch Moves Ahead (`action.yml`, `scripts/post_review.py`)**: checks out `pull_request.head.sha` and diffs against `git merge-base base-tip HEAD` instead of `refs/pull/<pr>/merge` (`HEAD^1..HEAD`), eliminating `HTTP 422 "Line could not be resolved"` line-number drift when new commits land on the target branch after a PR opens (while continuing to read trusted rubrics, `.github/pi-review-prompt.md`, and `.gitattributes` from `base-tip`). `submit_inline_comments()` also pins `"commit_id": head_sha` and retries individual comments if a multi-comment batch `POST` returns `422`.
+
 ## [1.12.1] - 2026-11-14
 
 ### Fixed
-- **Polished Coffee-Sip Choreography & Zero-Ghosting SMIL (`assets/huggy-reviewing.svg`)**: re-choreographs `huggy-reviewing.svg` into a smooth 36-beat (`6.12s`) pixel-art loop — brisk typing, a clear pause on the home row, glancing left and reaching across to grip the mug handle on the desk, lifting to mouth height below the sunglasses, tilting the mug + head `1px` back to sip with rising steam, setting the mug back down on the desk, and returning the hand to resume typing — driven by discrete `visibility` (`begin="0s"`) with explicit `visibility="hidden"` defaults so browsers never alpha-blend overlapping layers.
+- **Polished Coffee-Sip Choreography & Zero-Ghosting SMIL (`assets/huggy-reviewing.svg`)**: re-choreographs `huggy-reviewing.svg` into a smooth 36-beat (`6.12s`) pixel-art loop — brisk typing, a clear pause on the home row, glancing left and reaching across to grip the mug handle on the desk, lifting to mouth height below the sunglasses, tilting the mug + head `1px` back to sip with rising steam, setting the mug back down on the desk, and returning the hand to resume typing — driven by discrete `visibility` (`begin="0s"`) with explicit base `visibility` matching each layer's first beat so browsers never alpha-blend overlapping layers.
 
 ## [1.12.0] - 2026-11-14
 

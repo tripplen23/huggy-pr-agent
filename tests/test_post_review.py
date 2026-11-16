@@ -1070,6 +1070,7 @@ const count = 1;
             self.assertEqual(anim.attrib.get("attributeName"), "visibility")
             self.assertEqual(anim.attrib.get("begin"), "0s")
             self.assertEqual(anim.attrib.get("calcMode"), "discrete")
+            self.assertEqual(len(anim.attrib.get("values", "").split(";")), 36)
 
         # 2. Judge banner preserves sha= marker and <details> sections from review-start banner
         start_md = post_progress.build_progress_markdown(
@@ -1288,6 +1289,34 @@ const count = 1;
                 os.environ.clear()
                 os.environ.update(old_env)
                 sys.argv = old_argv
+
+
+    def test_submit_inline_comments_pins_commit_id_and_isolates_422_item(self) -> None:
+        calls: list[dict] = []
+        sha40 = "5c28210e35d829af390422fa93d9a389339a0f51"
+
+        def fake_api(method: str, url: str, payload: dict):
+            calls.append(payload)
+            if len(payload["comments"]) > 1:
+                raise RuntimeError("422 Line could not be resolved")
+            if payload["comments"][0]["line"] == 848:
+                raise RuntimeError("422 Line could not be resolved")
+            return {"id": 1}
+
+        inline = [
+            ({"path": "a.ts", "line": 817, "side": "RIGHT", "body": "ok1"}, "summary-ok1"),
+            ({"path": "a.ts", "line": 848, "side": "RIGHT", "body": "bad"}, "summary-bad"),
+            ({"path": "b.ts", "line": 42, "side": "RIGHT", "body": "ok2"}, "summary-ok2"),
+        ]
+        posted, demoted = post_review.submit_inline_comments("HuggerHustle/platform-v2", 426, sha40, inline, fake_api)
+        self.assertEqual(posted, 2)
+        self.assertEqual(demoted, ["summary-bad"])
+        self.assertTrue(all(c.get("commit_id") == sha40 for c in calls))
+
+        # Action review mode checks out pull_request.head.sha (never the synthetic merge commit)
+        action_yml = open("action.yml", encoding="utf-8").read()
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", action_yml)
+        self.assertNotIn("Checkout PR merge ref", action_yml)
 
 
 if __name__ == "__main__":
