@@ -390,10 +390,11 @@ const c = 4;
         self.assertNotIn("<pr_description>", stripped)
         self.assertIn("Additional repository instructions:\nKeep foo.", stripped)
 
-        # Progress banner preserves sha= and embeds huggy-reviewing.svg
+        # Progress banner preserves sha= and embeds huggy-reviewing.svg at 1:1 width="232"
         prog = post_progress.build_progress_markdown(huge_files[:2], num_bundles=2, last_sha="abc1234567")
         self.assertTrue(prog.startswith("<!-- pi-review sha=abc1234567 -->"))
         self.assertIn("huggy-reviewing.svg", prog)
+        self.assertIn('width="232"', prog)
         self.assertIn("huggy-icon.svg", post_review.format_review_heading(post_review.HUGGY_ICON_URL))
         self.assertIn("2 parallel bundles", prog)
 
@@ -1026,6 +1027,10 @@ const count = 1;
             self.assertEqual(root.attrib.get("shape-rendering"), "crispEdges")
             expected_vb = "0 0 232 112" if svg_name == "huggy-reviewing.svg" else "0 0 208 112"
             self.assertEqual(root.attrib.get("viewBox"), expected_vb)
+            self.assertEqual(
+                root.attrib.get("viewBox"),
+                f"0 0 {root.attrib.get('width')} {root.attrib.get('height')}",
+            )
 
         for icon_name in ("huggy-icon.svg", "huggy-good.svg", "huggy-serious.svg"):
             iroot = ET.parse(os.path.join(assets_dir, icon_name)).getroot()
