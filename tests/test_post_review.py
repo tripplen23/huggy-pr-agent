@@ -1012,7 +1012,7 @@ const count = 1;
     def test_v110_live_stage_animations_and_svg_validity(self):
         import xml.etree.ElementTree as ET
 
-        # 1. Every pixel-art SVG parses as valid XML with crispEdges and 208x112 viewBox
+        # 1. Every pixel-art SVG parses as valid XML with crispEdges and expected viewBox
         assets_dir = os.path.join(os.path.dirname(__file__), "..", "assets")
         for svg_name in (
             "huggy-reviewing.svg",
@@ -1024,7 +1024,8 @@ const count = 1;
         ):
             root = ET.parse(os.path.join(assets_dir, svg_name)).getroot()
             self.assertEqual(root.attrib.get("shape-rendering"), "crispEdges")
-            self.assertEqual(root.attrib.get("viewBox"), "0 0 208 112")
+            expected_vb = "0 0 232 112" if svg_name == "huggy-reviewing.svg" else "0 0 208 112"
+            self.assertEqual(root.attrib.get("viewBox"), expected_vb)
 
         for icon_name in ("huggy-icon.svg", "huggy-good.svg", "huggy-serious.svg"):
             iroot = ET.parse(os.path.join(assets_dir, icon_name)).getroot()
