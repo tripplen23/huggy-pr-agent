@@ -46,7 +46,7 @@ def build_progress_markdown(
     lines = [
         marker,
         "> [!NOTE]",
-        f'> <img src="{svg_url}" alt="Huggy is reviewing this PR" width="208" />',
+        f'> <img src="{svg_url}" alt="Huggy is reviewing this PR" width="232" />',
         ">",
         f"> Currently reviewing **{len(files)} file(s)** ({total_lines} changed lines){bundle_note}. This animation disappears automatically once Huggy finishes.",
         "",

@@ -2,6 +2,11 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.12.3] - 2026-11-16
+
+### Added
+- **Desk Plant in Review Status Animation (`assets/huggy-reviewing.svg`, `scripts/post_progress.py`, `README.md`)**: widens the desk scene to `232x112` (`58x28` at `4px` pixel grid) to place a 16-bit terracotta pot and V-split green sprout (`#86EFAC` / `#4ADE80` / `#22C55E`) with a subtle breeze sway beside Huggy's laptop.
+
 ## [1.12.2] - 2026-11-16
 
 ### Fixed

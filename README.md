@@ -26,7 +26,7 @@
 While a review pipeline is running, Huggy shows a compact pixel-art status indicator, then replaces it with a clean summary and inline diff comments once finished:
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-reviewing.svg" alt="Huggy reviewing animation" width="208" />
+  <img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/main/assets/huggy-reviewing.svg" alt="Huggy reviewing animation" width="232" />
 </div>
 
 <br />
