@@ -187,6 +187,9 @@ def build_fix_request_markdown(
     return "\n".join(parts)
 
 
+DONE_MARKER_FMT = "<!-- huggy-done cid={cid} -->"
+
+
 def is_bot_comment_node(node: dict) -> bool:
     author = (node or {}).get("author") or {}
     login = (author.get("login") or "").lower()
@@ -194,9 +197,22 @@ def is_bot_comment_node(node: dict) -> bool:
     body = ((node or {}).get("body") or "").strip()
     if typename == "bot" or login.endswith("[bot]") or login == "github-actions":
         return True
-    if body.startswith(("<!-- huggy-cmd-progress -->", "<!-- pi-review", "<!-- pi ")):
+    if body.startswith(("<!-- huggy-cmd-progress -->", "<!-- huggy-done ", "<!-- pi-review", "<!-- pi ")):
         return True
     return False
+
+
+def is_completed_fix_reply(node: dict, target_cid: int | None = None, in_thread: bool = True) -> bool:
+    """True only for terminal bot completion replies (never in-flight progress banners or failure notices)."""
+    if not is_bot_comment_node(node):
+        return False
+    body = ((node or {}).get("body") or "").strip()
+    if target_cid is not None and DONE_MARKER_FMT.format(cid=target_cid) in body:
+        return True
+    if not in_thread:
+        return False
+    stripped = re.sub(r"^<!--[^>]+-->\s*", "", body).strip()
+    return stripped.startswith(("Pushed `", "No change made."))
 
 
 def collect_pending_fix_tasks(
@@ -256,7 +272,10 @@ def collect_pending_fix_tasks(
                 trigger_already_answered = True
             else:
                 trig_idx = c_ids.index(trigger_comment_id)
-                if any(is_bot_comment_node(later) for later in c_nodes[trig_idx + 1 :]):
+                if any(
+                    is_completed_fix_reply(later, target_cid=trigger_comment_id, in_thread=True)
+                    for later in c_nodes[trig_idx + 1 :]
+                ):
                     trigger_already_answered = True
 
         if t.get("isResolved"):
@@ -277,12 +296,11 @@ def collect_pending_fix_tasks(
 
         if last_fix_node is None:
             continue
-        # Already answered or in-flight if a bot replied after `last_fix_idx`
-        if any(is_bot_comment_node(later) for later in c_nodes[last_fix_idx + 1 :]):
-            continue
-
         cid = last_fix_node.get("databaseId")
         if not isinstance(cid, int):
+            continue
+        # Only skip if a terminal completion reply exists after `last_fix_idx` (in-flight/failed stays retryable!)
+        if any(is_completed_fix_reply(later, target_cid=cid, in_thread=True) for later in c_nodes[last_fix_idx + 1 :]):
             continue
         author_obj = last_fix_node.get("author") or {}
         c_login = author_obj.get("login") or ""
@@ -326,7 +344,7 @@ def collect_pending_fix_tasks(
             "progress_comment_kind": None,
         }
 
-    # 2. Scan top-level PR Conversation comments after the most recent bot reply
+    # 2. Scan top-level PR Conversation comments using per-comment `<!-- huggy-done cid=... -->` completion markers
     ic_nodes = [ic for ic in issue_comments if ic]
     if trigger_comment_id is not None:
         ic_ids = [ic.get("databaseId") for ic in ic_nodes]
@@ -334,17 +352,12 @@ def collect_pending_fix_tasks(
             trigger_seen_in_gql = True
             trig_idx = ic_ids.index(trigger_comment_id)
             if any(
-                is_bot_comment_node(later) and not ((later.get("body") or "").startswith("<!-- pi-review"))
+                is_completed_fix_reply(later, target_cid=trigger_comment_id, in_thread=False)
                 for later in ic_nodes[trig_idx + 1 :]
             ):
                 trigger_already_answered = True
 
-    last_bot_ic_idx = -1
     for idx, ic in enumerate(ic_nodes):
-        if is_bot_comment_node(ic) and not ((ic.get("body") or "").startswith("<!-- pi-review")):
-            last_bot_ic_idx = idx
-
-    for ic in ic_nodes[last_bot_ic_idx + 1 :]:
         if is_bot_comment_node(ic):
             continue
         cmd, summary = parse_command(ic.get("body") or "")
@@ -352,6 +365,8 @@ def collect_pending_fix_tasks(
             continue
         cid = ic.get("databaseId")
         if not isinstance(cid, int) or cid in tasks_by_cid:
+            continue
+        if any(is_completed_fix_reply(later, target_cid=cid, in_thread=False) for later in ic_nodes[idx + 1 :]):
             continue
         author_obj = ic.get("author") or {}
         c_login = author_obj.get("login") or ""

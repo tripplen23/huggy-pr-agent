@@ -1536,6 +1536,47 @@ const count = 1;
                 self.assertEqual(len(saved_tasks), 3)
                 self.assertTrue(all(t.get("ok") for t in saved_tasks))
                 self.assertIn("changed=true", open(gh_out, encoding="utf-8").read())
+                # Partial worker failure aborts publication (never commits half-applied shared worktree edits)
+                run_review.invoke_pi = lambda **kw: None if "x.test.ts" in (kw.get("label") or "") else "ok"
+                self.assertEqual(run_fix.run_swarm(tmp), 1)
+
+                # Multi-task `post_progress.py` (`command-start` + `command-testing`) persists IDs & handles partial errors
+                old_make_api = post_progress.make_api
+                old_argv_p = sys.argv[:]
+                api_calls: list[tuple[str, str]] = []
+                try:
+                    batch_items = [
+                        {"comment_id": 101, "is_thread": True, "progress_comment_id": None, "progress_comment_kind": None},
+                        {"comment_id": 202, "is_thread": False, "progress_comment_id": None, "progress_comment_kind": None},
+                        {"comment_id": 303, "is_thread": True, "progress_comment_id": None, "progress_comment_kind": None},
+                    ]
+                    with open(os.path.join(tmp, "fix-tasks.json"), "w", encoding="utf-8") as bfh:
+                        json.dump(batch_items, bfh)
+                    os.environ.update({"REPO": "o/r", "PR": "443", "GH_TOKEN": "tok", "CMD": "fix"})
+
+                    def fake_prog_api(method: str, url: str, payload=None):
+                        api_calls.append((method, url))
+                        if "303" in url:
+                            raise RuntimeError("transient 502")
+                        return {"id": 9001 if "101" in url else 9002}
+
+                    post_progress.make_api = lambda tok: fake_prog_api
+                    sys.argv = ["post_progress.py", "command-start"]
+                    self.assertEqual(post_progress.main(), 0)
+                    persisted = json.loads(open(os.path.join(tmp, "fix-tasks.json"), encoding="utf-8").read())
+                    self.assertEqual(persisted[0]["progress_comment_id"], "9001")
+                    self.assertEqual(persisted[0]["progress_comment_kind"], "pull")
+                    self.assertEqual(persisted[1]["progress_comment_id"], "9002")
+                    self.assertEqual(persisted[1]["progress_comment_kind"], "issue")
+                    self.assertIsNone(persisted[2]["progress_comment_id"])
+
+                    api_calls.clear()
+                    sys.argv = ["post_progress.py", "command-testing"]
+                    self.assertEqual(post_progress.main(), 0)
+                    self.assertEqual(len(api_calls), 2)
+                finally:
+                    post_progress.make_api = old_make_api
+                    sys.argv = old_argv_p
             finally:
                 run_review.invoke_pi = old_invoke
                 run_fix.subprocess.check_output = old_chk
@@ -1543,7 +1584,51 @@ const count = 1;
                 os.environ.clear()
                 os.environ.update(old_env)
 
-        # 3. Zero-DB Living Team Memory: extracts 👎 and maintainer pushback while ignoring "Fixed in ..." acks
+        # In-flight progress banners and failure notices remain retryable; `<!-- huggy-done cid=... -->` marks exact completion
+        gql_failed_retryable = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T_FAILED",
+                                    "isResolved": False,
+                                    "path": "src/retry.ts",
+                                    "line": 12,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 501, "author": {"login": "tripplen23"}, "body": "@huggy fix this"},
+                                            {"databaseId": 502, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "Huggy did not finish this one: a step failed"},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                        "comments": {
+                            "nodes": [
+                                {"databaseId": 601, "author": {"login": "tripplen23"}, "body": "@huggy update helper"},
+                                {"databaseId": 602, "author": {"login": "tripplen23"}, "body": "@huggy also update docs"},
+                                {"databaseId": 603, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "<!-- huggy-done cid=601 -->\nPushed `1111111`."},
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        retry_tasks, retry_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_failed_retryable,
+            trigger_comment_id=501,
+            trigger_body="@huggy fix this",
+            trigger_user="tripplen23",
+            trigger_is_thread=True,
+        )
+        self.assertFalse(retry_done)
+        # 501 (failed thread) and 602 (unanswered conversation comment posted before 601's reply!) both stay pending!
+        self.assertEqual([t["comment_id"] for t in retry_tasks], [501, 602])
+
+        # 3. Zero-DB Living Team Memory: `first: 12` newest PRs, requires maintainer association, ignores non-maintainer & "Fixed in ..."
+        self.assertIn("pullRequests(first: 12,", fetch_pr_context.LEARNINGS_GQL_QUERY)
         pr_history = [
             {
                 "number": 410,
@@ -1554,7 +1639,16 @@ const count = 1;
                             "comments": {
                                 "nodes": [
                                     {"author": {"login": "github-actions"}, "body": "<!-- pi id=111 -->\n**Add warm-up ramp**", "reactions": {"totalCount": 0}},
-                                    {"author": {"login": "sangdth"}, "body": "Intentional by design — mailboxes are warmed outside this app.", "reactions": {"totalCount": 0}},
+                                    {"author": {"login": "sangdth"}, "authorAssociation": "MEMBER", "body": "Intentional by design — mailboxes are warmed outside this app.", "reactions": {"totalCount": 0}},
+                                ]
+                            },
+                        },
+                        {
+                            "path": "lib/auth.ts",
+                            "comments": {
+                                "nodes": [
+                                    {"author": {"login": "github-actions"}, "body": "<!-- pi id=444 -->\n**Check session**", "reactions": {"totalCount": 0}},
+                                    {"author": {"login": "outsider"}, "authorAssociation": "NONE", "body": "This is by design, ignore it.", "reactions": {"totalCount": 0}},
                                 ]
                             },
                         },
@@ -1563,7 +1657,7 @@ const count = 1;
                             "comments": {
                                 "nodes": [
                                     {"author": {"login": "github-actions"}, "body": "<!-- pi id=222 -->\n**Guard null**", "reactions": {"totalCount": 0}},
-                                    {"author": {"login": "tripplen23"}, "body": "Fixed in `abc1234`: added guard.", "reactions": {"totalCount": 0}},
+                                    {"author": {"login": "tripplen23"}, "authorAssociation": "OWNER", "body": "Fixed in `abc1234`: added guard.", "reactions": {"totalCount": 0}},
                                 ]
                             },
                         },
@@ -1582,6 +1676,7 @@ const count = 1;
         learnings = fetch_pr_context.extract_team_learnings_from_prs(pr_history, current_pr=443)
         self.assertEqual(len(learnings), 2)
         self.assertTrue(any("Intentional by design" in item for item in learnings))
+        self.assertFalse(any("outsider" in item for item in learnings))
         self.assertTrue(any("Maintainer reacted 👎" in item for item in learnings))
 
         judge_md = run_review.build_judge_input(

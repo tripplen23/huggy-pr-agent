@@ -684,7 +684,7 @@ def find_last_reviewed_sha(issue_comments: list[dict]) -> str | None:
 LEARNINGS_GQL_QUERY = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
-    pullRequests(last: 12, states: [MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(first: 12, states: [MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
         number
         reviewThreads(last: 25) {
@@ -693,6 +693,7 @@ query($owner: String!, $name: String!) {
             comments(first: 6) {
               nodes {
                 author { __typename login }
+                authorAssociation
                 body
                 reactions(content: THUMBS_DOWN) {
                   totalCount
@@ -843,6 +844,9 @@ def extract_team_learnings_from_prs(pr_nodes: list[dict], current_pr: int | None
                 r_author = (reply.get("author") or {})
                 r_login = (r_author.get("login") or "").lower()
                 if r_author.get("__typename") == "Bot" or r_login.endswith("[bot]") or r_login == "github-actions":
+                    continue
+                r_assoc = (reply.get("authorAssociation") or "").upper()
+                if r_assoc and r_assoc not in {"OWNER", "MEMBER", "COLLABORATOR"}:
                     continue
                 r_body = clean_body(reply.get("body") or "", limit=220).strip()
                 if not r_body or FIXED_ACK_RE.match(r_body) or r_body.startswith(("@huggy", "@pi", "/")):

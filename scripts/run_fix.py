@@ -20,6 +20,7 @@ if SCRIPT_DIR not in sys.path:
 import fetch_pr_context  # noqa: E402
 import post_progress  # noqa: E402
 import post_review  # noqa: E402
+import prepare_command  # noqa: E402
 import run_review  # noqa: E402
 
 BLOCKED_IMG = (
@@ -279,8 +280,9 @@ def run_swarm(temp: str) -> int:
             if _exec_group(len(file_groups) + j, "", g_tasks, allow_bash=True):
                 any_succeeded = True
 
-    if not any_succeeded:
-        sys.stderr.write("All @huggy fix worker(s) failed.\n")
+    failed_tasks = [t for t in tasks if t.get("ok") is False]
+    if not any_succeeded or failed_tasks:
+        sys.stderr.write("At least one @huggy fix worker failed; aborting so partial edits are not published.\n")
         return 1
 
     with open(tasks_path, "w", encoding="utf-8") as tfh:
@@ -375,10 +377,16 @@ def publish_fix_results(temp: str, changed: bool) -> int:
     subprocess.run(["git", "config", "--local", "--unset-all", "core.fsmonitor"], check=False, stderr=subprocess.DEVNULL)
     subprocess.run(["git", "config", "--local", "--unset-all", "core.hooksPath"], check=False, stderr=subprocess.DEVNULL)
 
+    def _stamp_done(t: dict, text_body: str) -> str:
+        tcid = t.get("comment_id")
+        if isinstance(tcid, int) and tcid > 0:
+            return f"{prepare_command.DONE_MARKER_FMT.format(cid=tcid)}\n{text_body}"
+        return text_body
+
     if not changed:
         for t in tasks:
             reply_txt = (t.get("reply") or open(os.path.join(temp, "reply.md"), encoding="utf-8").read()).strip()
-            deliver_task_answer(api, repo, pr, t, f"No change made.\n\n{reply_txt}")
+            deliver_task_answer(api, repo, pr, t, _stamp_done(t, f"No change made.\n\n{reply_txt}"))
         return 0
 
     pr_info = api("GET", f"https://api.github.com/repos/{repo}/pulls/{pr}") or {}
@@ -432,25 +440,20 @@ def publish_fix_results(temp: str, changed: bool) -> int:
     extra_hdr = f"http.{srv}/.extraheader=AUTHORIZATION: basic {git_basic}"
     remote_url = f"{srv}/{repo}.git"
     push_cmd = ["git", "-c", extra_hdr, "push", "-q", "--no-verify", remote_url, f"HEAD:refs/heads/{branch}"]
-    if subprocess.call(push_cmd) != 0:
-        print("Push rejected (remote advanced); rebasing onto latest branch head and retrying once...")
-        subprocess.run(["git", "-c", extra_hdr, "fetch", "-q", "--no-tags", remote_url, f"refs/heads/{branch}"], check=True)
-        subprocess.run(["git", "rebase", "FETCH_HEAD"], check=True)
-        if os.path.isfile(".git/FETCH_HEAD"):
-            os.remove(".git/FETCH_HEAD")
-        subprocess.run(push_cmd, check=True)
+    subprocess.run(push_cmd, check=True)
 
     sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
 
     def _reply_one(t: dict) -> None:
         reply_txt = (t.get("reply") or "").strip()
-        deliver_task_answer(api, repo, pr, t, f"Pushed `{sha}` to `{branch}`.\n\n{reply_txt}")
+        deliver_task_answer(api, repo, pr, t, _stamp_done(t, f"Pushed `{sha}` to `{branch}`.\n\n{reply_txt}"))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(tasks))) as pool:
         list(pool.map(_reply_one, tasks))
 
     # Auto-resolve all addressed inline review threads
     thread_tasks = [t for t in tasks if t.get("is_thread")]
+    actual_resolved = 0
     if thread_tasks:
         owner, name = repo.split("/", 1)
         missing_tids = {t["comment_id"] for t in thread_tasks if not t.get("thread_id") and isinstance(t.get("comment_id"), int)}
@@ -488,12 +491,15 @@ def publish_fix_results(temp: str, changed: bool) -> int:
             resolved_tids.add(tid)
             try:
                 res_mut = api("POST", "https://api.github.com/graphql", {"query": mutation, "variables": {"id": tid}})
-                if not post_review.is_thread_resolved_response(res_mut):
-                    sys.stderr.write(f"warning: resolveReviewThread did not resolve {tid}\n")
+                ok_res, res_msg = post_review.is_thread_resolved_response(res_mut)
+                if ok_res:
+                    actual_resolved += 1
+                else:
+                    sys.stderr.write(f"warning: resolveReviewThread did not resolve {tid} ({res_msg})\n")
             except Exception as exc:
                 sys.stderr.write(f"warning: could not auto-resolve thread {tid} ({exc})\n")
 
-    print(f"Published `{sha}` on {repo}#{pr} ({len(tasks)} comment(s) answered, {len(thread_tasks)} thread(s) resolved).")
+    print(f"Published `{sha}` on {repo}#{pr} ({len(tasks)} comment(s) answered, {actual_resolved}/{len(thread_tasks)} thread(s) resolved).")
     return 0
 
 
