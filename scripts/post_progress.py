@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import re
@@ -196,6 +197,43 @@ def main() -> int:
         cmd = (os.environ.get("CMD") or "fix").strip().lower()
         if cmd == "review":
             return 0
+        tasks_path = os.path.join(temp, "fix-tasks.json")
+        if cmd == "fix" and os.path.isfile(tasks_path):
+            try:
+                tasks = json.loads(open(tasks_path, encoding="utf-8").read()) or []
+            except Exception:
+                tasks = []
+            if tasks:
+                body = build_command_progress_markdown("fix", stage="start")
+
+                def _post_one(task: dict) -> None:
+                    tcid = task.get("comment_id")
+                    if task.get("is_thread") and isinstance(tcid, int):
+                        t_url = f"https://api.github.com/repos/{repo}/pulls/{pr}/comments/{tcid}/replies"
+                        t_kind = "pull"
+                    else:
+                        t_url = f"https://api.github.com/repos/{repo}/issues/{pr}/comments"
+                        t_kind = "issue"
+                    try:
+                        created = api("POST", t_url, {"body": body}) or {}
+                        pcid = created.get("id")
+                        if pcid:
+                            task["progress_comment_id"] = str(pcid)
+                            task["progress_comment_kind"] = t_kind
+                    except Exception as exc:
+                        sys.stderr.write(f"warning: could not post progress banner for comment {tcid} ({exc})\n")
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(tasks))) as pool:
+                    list(pool.map(_post_one, tasks))
+                with open(tasks_path, "w", encoding="utf-8") as tfh:
+                    json.dump(tasks, tfh)
+                first_prog = next((t for t in tasks if t.get("progress_comment_id")), None)
+                if first_prog:
+                    write_gh_output("progress_comment_id", str(first_prog["progress_comment_id"]))
+                    write_gh_output("progress_comment_kind", str(first_prog["progress_comment_kind"]))
+                print(f"Posted {sum(1 for t in tasks if t.get('progress_comment_id'))}/{len(tasks)} in-progress `fix` banner(s) on {repo}#{pr}.")
+                return 0
+
         comment_id = (os.environ.get("COMMENT_ID") or "").strip()
         is_thread = bool((os.environ.get("THREAD") or "").strip()) and comment_id.isdigit()
         body = build_command_progress_markdown(cmd, stage="start")
@@ -217,20 +255,41 @@ def main() -> int:
         return 0
 
     if mode == "command-testing":
-        prog_id = (os.environ.get("PROGRESS_COMMENT_ID") or "").strip()
-        prog_kind = (os.environ.get("PROGRESS_COMMENT_KIND") or "issue").strip().lower()
-        if not prog_id.isdigit():
-            return 0
         body = build_command_progress_markdown("fix", stage="testing")
-        try:
-            if prog_kind == "pull":
-                url = f"https://api.github.com/repos/{repo}/pulls/comments/{prog_id}"
-            else:
-                url = f"https://api.github.com/repos/{repo}/issues/comments/{prog_id}"
-            api("PATCH", url, {"body": body})
-            print(f"Updated fix animation to test-gate phase (comment {prog_id}) on {repo}#{pr}.")
-        except Exception as exc:
-            sys.stderr.write(f"warning: could not update testing banner ({exc}); continuing\n")
+        tasks_path = os.path.join(temp, "fix-tasks.json")
+        targets: list[tuple[str, str]] = []
+        if os.path.isfile(tasks_path):
+            try:
+                for t in json.loads(open(tasks_path, encoding="utf-8").read()) or []:
+                    pid = str(t.get("progress_comment_id") or "").strip()
+                    pkind = str(t.get("progress_comment_kind") or "issue").strip().lower()
+                    if pid.isdigit():
+                        targets.append((pid, pkind))
+            except Exception:
+                targets = []
+        if not targets:
+            prog_id = (os.environ.get("PROGRESS_COMMENT_ID") or "").strip()
+            prog_kind = (os.environ.get("PROGRESS_COMMENT_KIND") or "issue").strip().lower()
+            if prog_id.isdigit():
+                targets.append((prog_id, prog_kind))
+        if not targets:
+            return 0
+
+        def _patch_testing(pair: tuple[str, str]) -> None:
+            pid, pkind = pair
+            url = (
+                f"https://api.github.com/repos/{repo}/pulls/comments/{pid}"
+                if pkind == "pull"
+                else f"https://api.github.com/repos/{repo}/issues/comments/{pid}"
+            )
+            try:
+                api("PATCH", url, {"body": body})
+            except Exception as exc:
+                sys.stderr.write(f"warning: could not update testing banner {pid} ({exc}); continuing\n")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
+            list(pool.map(_patch_testing, targets))
+        print(f"Updated {len(targets)} fix animation(s) to test-gate phase on {repo}#{pr}.")
         return 0
 
     # Default: `review-start`

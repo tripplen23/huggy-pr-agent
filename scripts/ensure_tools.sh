@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Ensure `pi`, its remote model catalog (`models-store.json`), `rg`, and
-# provider credentials (API key and/or Google Vertex AI) are ready inside
+# Ensure `pi`, its remote model catalog (`models-store.json`), `rg`, `ast-grep` (`sg`),
+# and provider credentials (API key and/or Google Vertex AI) are ready inside
 # `$HOME/.pi-cli` without relying on `apt-get` or `brew`.
 set -euo pipefail
 
@@ -47,6 +47,30 @@ if ! command -v rg > /dev/null; then
     else
       echo "warning: could not fetch ripgrep release binary; falling back to built-in grep" >&2
     fi
+  fi
+fi
+
+if ! command -v ast-grep > /dev/null; then
+  os_name=$(uname -s)
+  arch_name=$(uname -m)
+  sg_target=""
+  case "${os_name}:${arch_name}" in
+    Linux:x86_64)                sg_target="x86_64-unknown-linux-musl" ;;
+    Linux:aarch64|Linux:arm64)   sg_target="aarch64-unknown-linux-gnu" ;;
+    Darwin:arm64|Darwin:aarch64) sg_target="aarch64-apple-darwin" ;;
+    Darwin:x86_64)               sg_target="x86_64-apple-darwin" ;;
+  esac
+  if [ -n "$sg_target" ]; then
+    sg_ver="0.51.3"
+    sg_url="https://github.com/ast-grep/ast-grep/releases/download/${sg_ver}/app-${sg_target}.zip"
+    sg_zip="${RUNNER_TEMP:-/tmp}/ast-grep-$$.zip"
+    if curl -fsSL --retry 3 --max-time 30 -o "$sg_zip" "$sg_url" 2>/dev/null && \
+       python3 -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); [z.extract(n,sys.argv[2]) for n in z.namelist() if n in ("sg","ast-grep")]' "$sg_zip" "$HOME/.pi-cli/bin" 2>/dev/null; then
+      chmod +x "$HOME/.pi-cli/bin/sg" "$HOME/.pi-cli/bin/ast-grep" 2>/dev/null || true
+    else
+      echo "warning: could not fetch ast-grep release binary; continuing with rg" >&2
+    fi
+    rm -f "$sg_zip"
   fi
 fi
 

@@ -414,9 +414,14 @@ runs:
         mb=$(git merge-base base-tip pr-head 2>/dev/null || git rev-parse base-tip)
         git branch -f base "$mb"
 
-        GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+        GIT_ATTR_SOURCE=base-tip git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/fetch_pr_context.py" "$RUNNER_TEMP/pr-context.md" "$RUNNER_TEMP/diff.patch"
-        python3 "$RUNNER_TEMP/pi-action/scripts/prepare_command.py" build-request "$RUNNER_TEMP/fix-request.md"
+        THREAD="${THREAD:-}" python3 "$RUNNER_TEMP/pi-action/scripts/prepare_command.py" build-request "$RUNNER_TEMP/fix-request.md"
+        if [ -f "$RUNNER_TEMP/fix-tasks.json" ] && [ "$(jq 'length' "$RUNNER_TEMP/fix-tasks.json" 2>/dev/null || echo 1)" = "0" ]; then
+          git config --local --unset-all "http.$SERVER/.extraheader" 2>/dev/null || true
+          rm -f .git/FETCH_HEAD
+          exit 0
+        fi
         if [ "$cmd" = "review" ]; then
           python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py"
         else
@@ -430,7 +435,7 @@ runs:
     # dependency lifecycle scripts (`postinstall`) from the PR branch cannot read
     # or exfiltrate any secret.
     - name: Set up project dependencies for fix
-      if: steps.prepare.outputs.go == 'true' && steps.prepare.outputs.cmd == 'fix' && inputs.setup_cmd != ''
+      if: steps.prepare.outputs.go == 'true' && steps.prepare.outputs.already_handled != 'true' && steps.prepare.outputs.cmd == 'fix' && inputs.setup_cmd != ''
       shell: bash
       env:
         SETUP_CMD: ${{ inputs.setup_cmd }}
@@ -440,7 +445,7 @@ runs:
 
     - name: Run Pi (command)
       id: fix
-      if: steps.prepare.outputs.go == 'true'
+      if: steps.prepare.outputs.go == 'true' && steps.prepare.outputs.already_handled != 'true'
       shell: bash
       env:
         PI_API_KEY: ${{ inputs.api_key }}
@@ -469,17 +474,17 @@ runs:
         # shellcheck disable=SC1091
         source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
 
-        if git cat-file -e "base:$RUBRIC_FILE" 2>/dev/null; then
-          git show "base:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
-        elif git cat-file -e "base:CLAUDE.md" 2>/dev/null; then
-          git show "base:CLAUDE.md" > "$RUNNER_TEMP/rubric.md"
+        if git cat-file -e "base-tip:$RUBRIC_FILE" 2>/dev/null; then
+          git show "base-tip:$RUBRIC_FILE" > "$RUNNER_TEMP/rubric.md"
+        elif git cat-file -e "base-tip:CLAUDE.md" 2>/dev/null; then
+          git show "base-tip:CLAUDE.md" > "$RUNNER_TEMP/rubric.md"
         else
           : > "$RUNNER_TEMP/rubric.md"
         fi
 
         if [ "$CMD" = "review" ]; then
-          if git cat-file -e "base:.github/pi-review-prompt.md" 2>/dev/null; then
-            git show "base:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief-template.md"
+          if git cat-file -e "base-tip:.github/pi-review-prompt.md" 2>/dev/null; then
+            git show "base-tip:.github/pi-review-prompt.md" > "$RUNNER_TEMP/brief-template.md"
           else
             cp "$RUNNER_TEMP/pi-action/prompts/review.md" "$RUNNER_TEMP/brief-template.md"
           fi
@@ -489,6 +494,11 @@ runs:
           python3 "$RUNNER_TEMP/pi-action/scripts/run_review.py"
           cp review.md "$RUNNER_TEMP/reply.md"
           echo "changed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ "$CMD" = "fix" ]; then
+          python3 "$RUNNER_TEMP/pi-action/scripts/run_fix.py" run
           exit 0
         fi
 
@@ -566,7 +576,7 @@ runs:
         fi
 
     - name: Update progress banner to verification test gate
-      if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != '' && steps.prepare.outputs.progress_comment_id != ''
+      if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -579,7 +589,42 @@ runs:
         python3 "$RUNNER_TEMP/pi-action/scripts/post_progress.py" command-testing
 
     - name: Verify fix
+      id: verify1
       if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != ''
+      shell: bash
+      env:
+        VERIFY_CMD: ${{ inputs.verify_cmd }}
+      run: |
+        set +e
+        eval "$VERIFY_CMD" > >(tee "$RUNNER_TEMP/verify-out.log") 2>&1
+        rc=$?
+        set -e
+        if [ "$rc" -eq 0 ]; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Repair verification failure (if needed)
+      if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != '' && steps.verify1.outputs.ok == 'false'
+      shell: bash
+      env:
+        PI_API_KEY: ${{ inputs.api_key }}
+        PI_API_KEY_ENV: ${{ inputs.api_key_env }}
+        PI_GCP_PROJECT: ${{ inputs.gcp_project }}
+        PI_GCP_LOCATION: ${{ inputs.gcp_location }}
+        PI_GCP_CREDENTIALS_JSON: ${{ inputs.gcp_credentials_json }}
+        PI_MODEL: ${{ inputs.model }}
+        PI_FALLBACK_MODEL: ${{ inputs.fallback_model }}
+        PI_VERSION: ${{ inputs.pi_version }}
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC1091
+        source "$RUNNER_TEMP/pi-action/scripts/ensure_tools.sh"
+        python3 "$RUNNER_TEMP/pi-action/scripts/run_fix.py" repair "$RUNNER_TEMP/verify-out.log"
+
+    - name: Re-verify repaired fix
+      if: steps.fix.outputs.changed == 'true' && inputs.verify_cmd != '' && steps.verify1.outputs.ok == 'false'
       shell: bash
       env:
         VERIFY_CMD: ${{ inputs.verify_cmd }}
@@ -588,7 +633,7 @@ runs:
         eval "$VERIFY_CMD"
 
     - name: Publish command result
-      if: success() && steps.prepare.outputs.go == 'true'
+      if: success() && steps.prepare.outputs.go == 'true' && steps.prepare.outputs.already_handled != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -597,16 +642,20 @@ runs:
         COMMENT_ID: ${{ github.event.comment.id }}
         THREAD: ${{ github.event_name == 'pull_request_review_comment' && 'yes' || '' }}
         CMD: ${{ steps.prepare.outputs.cmd }}
+        FIX_CHANGED: ${{ steps.fix.outputs.changed }}
         PROGRESS_COMMENT_ID: ${{ steps.prepare.outputs.progress_comment_id }}
         PROGRESS_COMMENT_KIND: ${{ steps.prepare.outputs.progress_comment_kind }}
         PI_REVIEW_PROFILE: ${{ inputs.review_profile }}
         GUARDED_PATHS: ${{ inputs.guarded_paths }}
       run: |
         set -euo pipefail
+        if [ "$CMD" = "fix" ]; then
+          python3 "$RUNNER_TEMP/pi-action/scripts/run_fix.py" publish
+          exit 0
+        fi
         api="https://api.github.com/repos/$REPO"
         auth="Authorization: Bearer $GH_TOKEN"
         reply=$(cat "$RUNNER_TEMP/reply.md")
-        blocked_img='<img src="https://raw.githubusercontent.com/tripplen23/huggy-pr-agent/v1/assets/huggy-blocked.svg" width="160" alt="Huggy stopped on a guarded boundary" />'
 
         if [ -n "$THREAD" ]; then
           post="$api/pulls/$PR/comments/$COMMENT_ID/replies"
@@ -636,7 +685,7 @@ runs:
         if [ "$CMD" = "review" ] || [ "$CMD" = "improve" ]; then
           cleanup_progress_comment
           export HEAD_SHA="$(git rev-parse HEAD)"
-          GIT_ATTR_SOURCE=base git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
+          GIT_ATTR_SOURCE=base-tip git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
           python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
           exit 0
         fi
@@ -665,87 +714,8 @@ runs:
           exit 0
         fi
 
-        rm -rf .git/hooks
-        git config --local --unset-all core.fsmonitor 2>/dev/null || true
-        git config --local --unset-all core.hooksPath 2>/dev/null || true
-
-        if [ "${{ steps.fix.outputs.changed }}" != "true" ]; then
-          answer "$(printf 'No change made.\n\n%s' "$reply")"
-          exit 0
-        fi
-
-        read -r branch default < <(curl -fsSL -H "$auth" "$api/pulls/$PR" \
-          | jq -r '"\(.head.ref) \(.head.repo.default_branch)"')
-        : "${branch:?could not read the PR branch}"
-        case "$branch" in
-          master|main|HEAD|refs/*|*/master|*/main) branch="" ;;
-        esac
-        if [ -z "$branch" ] || [ "$branch" = "$default" ]; then
-          answer "$(printf '%s\n\nRefusing to push: that is the default branch. Nothing was pushed.' "$blocked_img")"
-          exit 1
-        fi
-
-        git add -A
-        if [ -n "$GUARDED_PATHS" ]; then
-          # shellcheck disable=SC2086
-          touched=$(git diff --cached --name-only -- $GUARDED_PATHS)
-          if [ -n "$touched" ]; then
-            # shellcheck disable=SC2086
-            git reset -q -- $GUARDED_PATHS
-            answer "$(printf '%s\n\nThat fix wanted to change guarded build, dependency or migration files, which I do not touch (`%s`). Nothing was pushed; do it by hand.' "$blocked_img" "$(printf '%s' "$touched" | tr '\n' ' ')")"
-            exit 1
-          fi
-        fi
-
-        git_basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')
-        srv="${GITHUB_SERVER_URL:-https://github.com}"
-        git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
-          -c user.name=Huggy -c user.email=huggy@noreply.github.com \
-          commit -q -m "huggy: $(head -n 1 "$RUNNER_TEMP/request.txt" | cut -c1-72)"
-        git -c "http.$srv/.extraheader=AUTHORIZATION: basic $git_basic" \
-          push -q --no-verify "$srv/$REPO.git" "HEAD:refs/heads/$branch"
-
-        sha=$(git rev-parse --short HEAD)
-        answer "$(printf 'Pushed `%s` to `%s`.\n\n%s' "$sha" "$branch" "$reply")"
-
-        if [ -n "$THREAD" ]; then
-          python3 - <<'PY'
-        import json, os, sys, urllib.request
-        try:
-            owner, name = os.environ["REPO"].split("/", 1)
-            pr = int(os.environ["PR"])
-            cid = int(os.environ["COMMENT_ID"])
-            token = os.environ["GH_TOKEN"]
-            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "pi-pr-agent"}
-            q = """
-            query($owner: String!, $name: String!, $pr: Int!) {
-              repository(owner: $owner, name: $name) {
-                pullRequest(number: $pr) {
-                  reviewThreads(last: 100) {
-                    nodes { id isResolved comments(last: 100) { nodes { databaseId } } }
-                  }
-                }
-              }
-            }
-            """
-            req = urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": q, "variables": {"owner": owner, "name": name, "pr": pr}}).encode("utf-8"), headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                nodes = (((json.loads(resp.read().decode("utf-8")).get("data") or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads", {}).get("nodes") or []
-            for t in nodes:
-                if not t or t.get("isResolved"):
-                    continue
-                ids = {c.get("databaseId") for c in ((t.get("comments") or {}).get("nodes") or []) if c}
-                if cid in ids and t.get("id"):
-                    m = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }"
-                    urllib.request.urlopen(urllib.request.Request("https://api.github.com/graphql", data=json.dumps({"query": m, "variables": {"id": t["id"]}}).encode("utf-8"), headers=headers, method="POST"), timeout=20).read()
-                    break
-        except Exception as exc:
-            sys.stderr.write(f"warning: could not auto-resolve thread for comment {os.environ.get('COMMENT_ID')} ({exc})\n")
-        PY
-        fi
-
     - name: Report when command fails
-      if: (failure() || cancelled()) && steps.prepare.outputs.go == 'true'
+      if: (failure() || cancelled()) && steps.prepare.outputs.go == 'true' && steps.prepare.outputs.already_handled != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
@@ -759,6 +729,10 @@ runs:
         RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
+        if [ "$CMD" = "fix" ]; then
+          python3 "$RUNNER_TEMP/pi-action/scripts/run_fix.py" fail
+          exit 0
+        fi
         api="https://api.github.com/repos/$REPO"
         auth="Authorization: Bearer $GH_TOKEN"
         if [ "$CMD" = "review" ]; then
