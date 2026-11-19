@@ -295,8 +295,6 @@ def run_swarm(temp: str) -> int:
     combined_md = "\n\n".join(r for r in combined_replies if r).strip() + "\n"
     with open(os.path.join(temp, "reply.md"), "w", encoding="utf-8") as rfh:
         rfh.write(combined_md)
-    with open("review.md", "w", encoding="utf-8") as rfh2:
-        rfh2.write(combined_md)
 
     status_out = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
     changed = bool(status_out)

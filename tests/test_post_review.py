@@ -1687,12 +1687,92 @@ const count = 1;
                 self.assertEqual(run_fix.publish_fix_results(tmp_pub, changed=True), 1)
                 self.assertNotIn("AUTHORIZATION", err_buf.getvalue())
                 self.assertTrue(any("rejected" in b for b in delivered_bodies))
+
+                # `run_fix.main()` `fail` mode replaces spinner banners but preserves specific refusal messages
+                patched_fail: list[tuple[str, str]] = []
+                with open(os.path.join(tmp_pub, "fix-tasks.json"), "w", encoding="utf-8") as pfh2:
+                    json.dump(
+                        [
+                            {"comment_id": 801, "is_thread": False, "progress_comment_id": "99", "progress_comment_kind": "issue"},
+                            {"comment_id": 802, "is_thread": True, "progress_comment_id": "100", "progress_comment_kind": "pull"},
+                        ],
+                        pfh2,
+                    )
+
+                def fake_fail_api(method, url, payload=None):
+                    if method == "GET":
+                        if url.endswith("/99"):
+                            return {"body": f"{run_fix.BLOCKED_IMG}\n\nPush to `feat/x` was rejected."}
+                        return {"body": f"{fetch_pr_context.CMD_PROGRESS_MARKER}\nSpinner"}
+                    if method == "PATCH" and payload:
+                        patched_fail.append((url, payload.get("body", "")))
+                    return {"id": 1}
+
+                run_fix.make_gh_api = lambda tok: fake_fail_api
+                os.environ.update({"RUNNER_TEMP": tmp_pub, "RUN": "https://github.com/o/r/actions/runs/1"})
+                old_argv_rf = sys.argv[:]
+                old_inv_rf = run_review.invoke_pi
+                try:
+                    sys.argv = ["run_fix.py", "fail"]
+                    self.assertEqual(run_fix.main(), 0)
+                    # Refusal #99 preserved; spinner #100 replaced with failure notice!
+                    self.assertEqual(len(patched_fail), 1)
+                    self.assertTrue(patched_fail[0][0].endswith("/100"))
+                    self.assertIn("did not finish", patched_fail[0][1])
+
+                    # `run_fix.main()` `repair` mode invokes Lead repair pass on verify-out.log
+                    vlog = os.path.join(tmp_pub, "verify-out.log")
+                    with open(vlog, "w", encoding="utf-8") as vfh:
+                        vfh.write("error TS2322: Type 'null' is not assignable")
+                    run_review.invoke_pi = lambda **kw: "Fixed TS2322"
+                    sys.argv = ["run_fix.py", "repair", vlog]
+                    self.assertEqual(run_fix.main(), 0)
+                finally:
+                    sys.argv = old_argv_rf
+                    run_review.invoke_pi = old_inv_rf
             finally:
                 sys.stderr = old_stderr
                 run_fix.subprocess.run = old_run_p
                 run_fix.make_gh_api = old_mk_p
                 os.environ.clear()
                 os.environ.update(old_env_p)
+
+        # New `@huggy` comment posted at the end of a previously resolved thread is still collected
+        gql_reopened_thread = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T_RES",
+                                    "isResolved": True,
+                                    "path": "src/reopen.ts",
+                                    "line": 22,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 901, "author": {"login": "tripplen23"}, "body": "@huggy first fix"},
+                                            {"databaseId": 902, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "<!-- huggy-done cid=901 -->\nPushed `1111111`."},
+                                            {"databaseId": 903, "author": {"login": "tripplen23"}, "body": "@huggy one more tweak here"},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                        "comments": {"nodes": []},
+                    }
+                }
+            }
+        }
+        re_tasks, re_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_reopened_thread,
+            trigger_comment_id=903,
+            trigger_body="@huggy one more tweak here",
+            trigger_user="tripplen23",
+            trigger_is_thread=True,
+        )
+        self.assertFalse(re_done)
+        self.assertEqual([t["comment_id"] for t in re_tasks], [903])
 
         # 3. Zero-DB Living Team Memory: `first: 12` newest PRs, requires maintainer association, ignores non-maintainer & "Fixed in ..."
         self.assertIn("pullRequests(first: 12,", fetch_pr_context.LEARNINGS_GQL_QUERY)

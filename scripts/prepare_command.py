@@ -266,17 +266,14 @@ def collect_pending_fix_tasks(
         c_ids = [c.get("databaseId") for c in c_nodes]
         if trigger_comment_id is not None and trigger_comment_id in c_ids:
             trigger_seen_in_gql = True
-            if t.get("isResolved"):
+            trig_idx = c_ids.index(trigger_comment_id)
+            if any(
+                is_completed_fix_reply(later, target_cid=trigger_comment_id, in_thread=True)
+                for later in c_nodes[trig_idx + 1 :]
+            ):
                 trigger_already_answered = True
-            else:
-                trig_idx = c_ids.index(trigger_comment_id)
-                if any(
-                    is_completed_fix_reply(later, target_cid=trigger_comment_id, in_thread=True)
-                    for later in c_nodes[trig_idx + 1 :]
-                ):
-                    trigger_already_answered = True
 
-        if t.get("isResolved"):
+        if t.get("isResolved") and trigger_comment_id not in c_ids:
             continue
 
         # Find the latest human `fix` command in this open thread

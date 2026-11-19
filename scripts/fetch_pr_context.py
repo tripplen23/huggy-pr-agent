@@ -79,7 +79,7 @@ query($owner: String!, $name: String!, $pr: Int!) {
           line
           originalStartLine
           originalLine
-          comments(first: 10) {
+          comments(last: 25) {
             nodes {
               databaseId
               author { __typename login }
@@ -902,8 +902,8 @@ def fetch_repo_team_learnings(
             mined = extract_team_learnings_from_prs(pr_nodes, current_pr=current_pr)
             if mined:
                 sections.append("\n".join(mined))
-        except Exception:
-            pass
+        except Exception as exc:
+            sys.stderr.write(f"warning: could not mine team learnings ({exc}); continuing\n")
     return "\n\n".join(sections).strip()
 
 
