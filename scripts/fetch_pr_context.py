@@ -769,18 +769,28 @@ def build_downstream_caller_map(
     changed_set = set(changed_paths)
     sym_names = [s for s, _ in symbols]
     alt = "|".join(re.escape(s) for s in sym_names)
-    try:
-        res = subprocess.run(
-            ["rg", "-n", "--no-heading", "--color", "never", "-m", "12", f"\\b(?:{alt})\\b", "."],
-            cwd=worktree_root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        raw_out = res.stdout or ""
-    except Exception:
-        return ""
+    raw_out = ""
+    for cmd in (
+        ["rg", "-n", "--no-heading", "--color", "never", "-m", "12", f"\\b(?:{alt})\\b", "."],
+        ["git", "grep", "-n", "-E", f"\\b({alt})\\b"],
+        ["grep", "-rnE", f"\\b({alt})\\b", "."],
+    ):
+        try:
+            res = subprocess.run(
+                cmd,
+                cwd=worktree_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if res.returncode in (0, 1):
+                raw_out = res.stdout or ""
+                break
+        except FileNotFoundError:
+            continue
+        except Exception:
+            return ""
     if not raw_out.strip():
         return ""
 
