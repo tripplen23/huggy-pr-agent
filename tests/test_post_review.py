@@ -1627,6 +1627,73 @@ const count = 1;
         # 501 (failed thread) and 602 (unanswered conversation comment posted before 601's reply!) both stay pending!
         self.assertEqual([t["comment_id"] for t in retry_tasks], [501, 602])
 
+        # Pre-v1.13 marker-less `Pushed \`abc\`` reply on a conversation comment still marks it answered (`already_handled=True`)
+        gql_legacy_ic = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {"nodes": []},
+                        "comments": {
+                            "nodes": [
+                                {"databaseId": 701, "author": {"login": "tripplen23"}, "body": "@huggy remove unused import"},
+                                {"databaseId": 702, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "Pushed `deadbee` to `feat`."},
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        leg_tasks, leg_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_legacy_ic,
+            trigger_comment_id=701,
+            trigger_body="@huggy remove unused import",
+            trigger_user="tripplen23",
+            trigger_is_thread=False,
+        )
+        self.assertEqual(leg_tasks, [])
+        self.assertTrue(leg_done)
+
+        # Rejected `git push` in `publish_fix_results` returns 1 without leaking base64 auth header via CalledProcessError
+        with tempfile.TemporaryDirectory() as tmp_pub:
+            import io as _io
+            import subprocess as _sp
+
+            old_env_p = os.environ.copy()
+            old_run_p = run_fix.subprocess.run
+            old_mk_p = run_fix.make_gh_api
+            old_stderr = sys.stderr
+            err_buf = _io.StringIO()
+            delivered_bodies: list[str] = []
+            try:
+                os.environ.update({"REPO": "o/r", "PR": "443", "GH_TOKEN": "SUPER_SECRET_GH_TOK", "GUARDED_PATHS": ""})
+                with open(os.path.join(tmp_pub, "fix-tasks.json"), "w", encoding="utf-8") as pfh:
+                    json.dump([{"comment_id": 801, "is_thread": False, "summary": "fix", "reply": "ok", "progress_comment_id": "99", "progress_comment_kind": "issue"}], pfh)
+
+                def fake_pub_api(method, url, payload=None):
+                    if method == "GET":
+                        return {"head": {"ref": "feat/x", "repo": {"default_branch": "main"}}}
+                    if payload and "body" in payload:
+                        delivered_bodies.append(payload["body"])
+                    return {"id": 99}
+
+                def fake_subproc_run(argv, **kw):
+                    if "push" in argv:
+                        return _sp.CompletedProcess(argv, 1, "", "")
+                    return _sp.CompletedProcess(argv, 0, "", "")
+
+                run_fix.make_gh_api = lambda tok: fake_pub_api
+                run_fix.subprocess.run = fake_subproc_run
+                sys.stderr = err_buf
+                self.assertEqual(run_fix.publish_fix_results(tmp_pub, changed=True), 1)
+                self.assertNotIn("AUTHORIZATION", err_buf.getvalue())
+                self.assertTrue(any("rejected" in b for b in delivered_bodies))
+            finally:
+                sys.stderr = old_stderr
+                run_fix.subprocess.run = old_run_p
+                run_fix.make_gh_api = old_mk_p
+                os.environ.clear()
+                os.environ.update(old_env_p)
+
         # 3. Zero-DB Living Team Memory: `first: 12` newest PRs, requires maintainer association, ignores non-maintainer & "Fixed in ..."
         self.assertIn("pullRequests(first: 12,", fetch_pr_context.LEARNINGS_GQL_QUERY)
         pr_history = [

@@ -400,7 +400,7 @@ def publish_fix_results(temp: str, changed: bool) -> int:
     ):
         msg = f"{BLOCKED_IMG}\n\nRefusing to push: that is the default branch. Nothing was pushed."
         for t in tasks:
-            deliver_task_answer(api, repo, pr, t, msg)
+            deliver_task_answer(api, repo, pr, t, _stamp_done(t, msg))
         return 1
 
     subprocess.run(["git", "add", "-A"], check=True)
@@ -420,7 +420,7 @@ def publish_fix_results(temp: str, changed: bool) -> int:
                 f"(`{' '.join(touched)}`). Nothing was pushed; do it by hand."
             )
             for t in tasks:
-                deliver_task_answer(api, repo, pr, t, msg)
+                deliver_task_answer(api, repo, pr, t, _stamp_done(t, msg))
             return 1
 
     subject = build_commit_subject(tasks)
@@ -440,7 +440,17 @@ def publish_fix_results(temp: str, changed: bool) -> int:
     extra_hdr = f"http.{srv}/.extraheader=AUTHORIZATION: basic {git_basic}"
     remote_url = f"{srv}/{repo}.git"
     push_cmd = ["git", "-c", extra_hdr, "push", "-q", "--no-verify", remote_url, f"HEAD:refs/heads/{branch}"]
-    subprocess.run(push_cmd, check=True)
+    push_res = subprocess.run(push_cmd, check=False)
+    if push_res.returncode != 0:
+        sys.stderr.write(f"git push to `{branch}` failed (exit {push_res.returncode}); nothing was published.\n")
+        rej_msg = (
+            f"{BLOCKED_IMG}\n\n"
+            f"Push to `{branch}` was rejected (the branch moved while I was working). "
+            "Re-run `@huggy` to retry; nothing was pushed."
+        )
+        for t in tasks:
+            deliver_task_answer(api, repo, pr, t, rej_msg)
+        return 1
 
     sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
 

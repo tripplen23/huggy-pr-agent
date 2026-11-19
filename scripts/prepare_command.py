@@ -207,10 +207,8 @@ def is_completed_fix_reply(node: dict, target_cid: int | None = None, in_thread:
     if not is_bot_comment_node(node):
         return False
     body = ((node or {}).get("body") or "").strip()
-    if target_cid is not None and DONE_MARKER_FMT.format(cid=target_cid) in body:
-        return True
-    if not in_thread:
-        return False
+    if body.startswith("<!-- huggy-done "):
+        return bool(target_cid is not None and DONE_MARKER_FMT.format(cid=target_cid) in body)
     stripped = re.sub(r"^<!--[^>]+-->\s*", "", body).strip()
     return stripped.startswith(("Pushed `", "No change made."))
 
