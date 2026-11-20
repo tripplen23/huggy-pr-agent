@@ -623,7 +623,11 @@ def main() -> int:
             body = resp.read().decode("utf-8")
             return json.loads(body) if body else None
 
-    raw_text = open("review.md", encoding="utf-8").read()
+    review_md_path = os.path.join(temp, "review.md")
+    if not os.path.isfile(review_md_path) and os.path.isfile("review.md"):
+        review_md_path = "review.md"
+    with open(review_md_path, encoding="utf-8") as rfh:
+        raw_text = rfh.read()
     cleaned_text, new_pr_desc = extract_pr_description(raw_text)
     diff_text = open(f"{temp}/diff.patch", encoding="utf-8", errors="replace").read()
     hunk_of = parse_diff_hunks(diff_text)

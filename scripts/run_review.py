@@ -941,9 +941,11 @@ def main() -> int:
             return filtered, False
         return cands, True
 
+    review_out_path = os.path.join(temp, "review.md")
+
     if phase == "judge":
         if not os.path.isfile(stage_path):
-            return 0 if os.path.isfile("review.md") else 1
+            return 0 if os.path.isfile(review_out_path) else 1
         stage = json.loads(open(stage_path, encoding="utf-8").read())
         if not stage.get("judge_pending"):
             return 0
@@ -971,9 +973,9 @@ def main() -> int:
             ),
             api_key,
         )
-        with open("review.md", "w", encoding="utf-8") as rfh:
+        with open(review_out_path, "w", encoding="utf-8") as rfh:
             rfh.write(final_md)
-        print(f"Wrote review.md ({len(final_md)} bytes, {min(len(all_candidates), max_findings)} findings).")
+        print(f"Wrote {review_out_path} ({len(final_md)} bytes, {min(len(all_candidates), max_findings)} findings).")
         return 1 if judge_failed else 0
 
     brief_template = open(brief_template_path, encoding="utf-8").read()
@@ -992,7 +994,8 @@ def main() -> int:
             "**Effort:** 1 · **Security:** No issues\n\n"
             "No reviewable source files changed in this diff (only lockfiles, generated files, or deletions).\n"
         )
-        open("review.md", "w", encoding="utf-8").write(empty_md)
+        with open(review_out_path, "w", encoding="utf-8") as efh:
+            efh.write(empty_md)
         open(stage_path, "w", encoding="utf-8").write(json.dumps({"judge_pending": False, "num_candidates": 0}))
         print("Skipped LLM call: 0 reviewable files after filtering.")
         return 0
@@ -1153,7 +1156,7 @@ def main() -> int:
                 ),
                 api_key,
             )
-            with open("review.md", "w", encoding="utf-8") as pfh:
+            with open(review_out_path, "w", encoding="utf-8") as pfh:
                 pfh.write(provisional_md)
             print(f"[find] Saved {len(all_candidates)} candidate(s) for precision Judge pass.")
             return 0
@@ -1173,9 +1176,9 @@ def main() -> int:
         has_partial_failure=has_partial,
     )
     final_md = redact_secret(final_md, api_key)
-    with open("review.md", "w", encoding="utf-8") as fh:
+    with open(review_out_path, "w", encoding="utf-8") as fh:
         fh.write(final_md)
-    print(f"Wrote review.md ({len(final_md)} bytes, {min(len(all_candidates), max_findings)} findings).")
+    print(f"Wrote {review_out_path} ({len(final_md)} bytes, {min(len(all_candidates), max_findings)} findings).")
     return 0
 
 
