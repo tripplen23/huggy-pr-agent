@@ -200,7 +200,8 @@ def main() -> int:
         tasks_path = os.path.join(temp, "fix-tasks.json")
         if cmd == "fix" and os.path.isfile(tasks_path):
             try:
-                tasks = json.loads(open(tasks_path, encoding="utf-8").read()) or []
+                with open(tasks_path, encoding="utf-8") as tfh_r:
+                    tasks = json.load(tfh_r) or []
             except Exception:
                 tasks = []
             if tasks:
@@ -260,7 +261,9 @@ def main() -> int:
         targets: list[tuple[str, str]] = []
         if os.path.isfile(tasks_path):
             try:
-                for t in json.loads(open(tasks_path, encoding="utf-8").read()) or []:
+                with open(tasks_path, encoding="utf-8") as tfh_t:
+                    loaded_t = json.load(tfh_t) or []
+                for t in loaded_t:
                     pid = str(t.get("progress_comment_id") or "").strip()
                     pkind = str(t.get("progress_comment_kind") or "issue").strip().lower()
                     if pid.isdigit():

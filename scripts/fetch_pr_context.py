@@ -801,7 +801,7 @@ def build_downstream_caller_map(
         parts = ln.split(":", 2)
         if len(parts) < 3:
             continue
-        rel_path = parts[0].lstrip("./")
+        rel_path = parts[0][2:] if parts[0].startswith("./") else parts[0]
         line_no, snippet = parts[1], parts[2].strip()
         if rel_path in changed_set or IGNORED_RE.search(rel_path) or rel_path.startswith(".git/"):
             continue

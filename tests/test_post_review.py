@@ -1658,6 +1658,7 @@ const count = 1;
             import io as _io
             import subprocess as _sp
 
+            old_cwd_pub = os.getcwd()
             old_env_p = os.environ.copy()
             old_run_p = run_fix.subprocess.run
             old_mk_p = run_fix.make_gh_api
@@ -1665,6 +1666,7 @@ const count = 1;
             err_buf = _io.StringIO()
             delivered_bodies: list[str] = []
             try:
+                os.chdir(tmp_pub)
                 os.environ.update({"REPO": "o/r", "PR": "443", "GH_TOKEN": "SUPER_SECRET_GH_TOK", "GUARDED_PATHS": ""})
                 with open(os.path.join(tmp_pub, "fix-tasks.json"), "w", encoding="utf-8") as pfh:
                     json.dump([{"comment_id": 801, "is_thread": False, "summary": "fix", "reply": "ok", "progress_comment_id": "99", "progress_comment_kind": "issue"}], pfh)
@@ -1677,7 +1679,11 @@ const count = 1;
                     return {"id": 99}
 
                 def fake_subproc_run(argv, **kw):
+                    if "status" in argv:
+                        return _sp.CompletedProcess(argv, 0, " M src/a.ts\n", "")
                     if "push" in argv:
+                        if kw.get("check"):
+                            raise _sp.CalledProcessError(1, argv)
                         return _sp.CompletedProcess(argv, 1, "", "")
                     return _sp.CompletedProcess(argv, 0, "", "")
 
@@ -1712,6 +1718,7 @@ const count = 1;
                 os.environ.update({"RUNNER_TEMP": tmp_pub, "RUN": "https://github.com/o/r/actions/runs/1"})
                 old_argv_rf = sys.argv[:]
                 old_inv_rf = run_review.invoke_pi
+                repair_prompts: list[str] = []
                 try:
                     sys.argv = ["run_fix.py", "fail"]
                     self.assertEqual(run_fix.main(), 0)
@@ -1720,17 +1727,20 @@ const count = 1;
                     self.assertTrue(patched_fail[0][0].endswith("/100"))
                     self.assertIn("did not finish", patched_fail[0][1])
 
-                    # `run_fix.main()` `repair` mode invokes Lead repair pass on verify-out.log
+                    # `run_fix.main()` `repair` mode invokes Lead repair pass with the verification error
                     vlog = os.path.join(tmp_pub, "verify-out.log")
                     with open(vlog, "w", encoding="utf-8") as vfh:
                         vfh.write("error TS2322: Type 'null' is not assignable")
-                    run_review.invoke_pi = lambda **kw: "Fixed TS2322"
+                    run_review.invoke_pi = lambda **kw: (repair_prompts.append(kw.get("prompt_text", "")) or "Fixed TS2322")
                     sys.argv = ["run_fix.py", "repair", vlog]
                     self.assertEqual(run_fix.main(), 0)
+                    self.assertEqual(len(repair_prompts), 1)
+                    self.assertIn("TS2322", repair_prompts[0])
                 finally:
                     sys.argv = old_argv_rf
                     run_review.invoke_pi = old_inv_rf
             finally:
+                os.chdir(old_cwd_pub)
                 sys.stderr = old_stderr
                 run_fix.subprocess.run = old_run_p
                 run_fix.make_gh_api = old_mk_p

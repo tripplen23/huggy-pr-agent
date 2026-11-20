@@ -194,12 +194,7 @@ def is_bot_comment_node(node: dict) -> bool:
     author = (node or {}).get("author") or {}
     login = (author.get("login") or "").lower()
     typename = (author.get("__typename") or "").lower()
-    body = ((node or {}).get("body") or "").strip()
-    if typename == "bot" or login.endswith("[bot]") or login == "github-actions":
-        return True
-    if body.startswith(("<!-- huggy-cmd-progress -->", "<!-- huggy-done ", "<!-- pi-review", "<!-- pi ")):
-        return True
-    return False
+    return bool(typename == "bot" or login.endswith("[bot]") or login in {"github-actions", "huggy-bot"})
 
 
 def is_completed_fix_reply(node: dict, target_cid: int | None = None, in_thread: bool = True) -> bool:

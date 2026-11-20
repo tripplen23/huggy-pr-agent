@@ -29,13 +29,6 @@ BLOCKED_IMG = (
 )
 
 
-def write_gh_output(key: str, val: str) -> None:
-    out_path = os.environ.get("GITHUB_OUTPUT")
-    if out_path:
-        with open(out_path, "a", encoding="utf-8") as fh:
-            fh.write(f"{key}={val}\n")
-
-
 def group_fix_tasks(tasks: list[dict]) -> tuple[list[tuple[str, list[dict]]], list[tuple[str, list[dict]]]]:
     """Partition `tasks` into `(disjoint_file_groups, general_groups)`.
 
@@ -298,7 +291,7 @@ def run_swarm(temp: str) -> int:
 
     status_out = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
     changed = bool(status_out)
-    write_gh_output("changed", "true" if changed else "false")
+    post_progress.write_gh_output("changed", "true" if changed else "false")
     return 0
 
 
@@ -381,7 +374,10 @@ def publish_fix_results(temp: str, changed: bool) -> int:
             return f"{prepare_command.DONE_MARKER_FMT.format(cid=tcid)}\n{text_body}"
         return text_body
 
-    if not changed:
+    worktree_dirty = bool(
+        subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=False).stdout.strip()
+    )
+    if not changed or not worktree_dirty:
         for t in tasks:
             reply_txt = (t.get("reply") or open(os.path.join(temp, "reply.md"), encoding="utf-8").read()).strip()
             deliver_task_answer(api, repo, pr, t, _stamp_done(t, f"No change made.\n\n{reply_txt}"))
@@ -443,7 +439,7 @@ def publish_fix_results(temp: str, changed: bool) -> int:
         sys.stderr.write(f"git push to `{branch}` failed (exit {push_res.returncode}); nothing was published.\n")
         rej_msg = (
             f"{BLOCKED_IMG}\n\n"
-            f"Push to `{branch}` was rejected (the branch moved while I was working). "
+            f"Push to `{branch}` was rejected (for example, the remote branch advanced or branch protection blocked the push). "
             "Re-run `@huggy` to retry; nothing was pushed."
         )
         for t in tasks:
