@@ -375,7 +375,7 @@ def publish_fix_results(temp: str, changed: bool) -> int:
         return text_body
 
     worktree_dirty = bool(
-        subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=False).stdout.strip()
+        subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout.strip()
     )
     if not changed or not worktree_dirty:
         for t in tasks:

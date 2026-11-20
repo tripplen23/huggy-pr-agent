@@ -1678,9 +1678,13 @@ const count = 1;
                         delivered_bodies.append(payload["body"])
                     return {"id": 99}
 
+                status_out_val = " M src/a.ts\n"
+
                 def fake_subproc_run(argv, **kw):
                     if "status" in argv:
-                        return _sp.CompletedProcess(argv, 0, " M src/a.ts\n", "")
+                        if status_out_val is None and kw.get("check"):
+                            raise _sp.CalledProcessError(128, argv)
+                        return _sp.CompletedProcess(argv, 0, status_out_val or "", "")
                     if "push" in argv:
                         if kw.get("check"):
                             raise _sp.CalledProcessError(1, argv)
@@ -1693,6 +1697,17 @@ const count = 1;
                 self.assertEqual(run_fix.publish_fix_results(tmp_pub, changed=True), 1)
                 self.assertNotIn("AUTHORIZATION", err_buf.getvalue())
                 self.assertTrue(any("rejected" in b for b in delivered_bodies))
+
+                # Clean final worktree (e.g. repair reverted the edit) emits `No change made.` with `huggy-done`
+                delivered_bodies.clear()
+                status_out_val = ""
+                self.assertEqual(run_fix.publish_fix_results(tmp_pub, changed=True), 0)
+                self.assertTrue(any("No change made." in b and "<!-- huggy-done cid=801 -->" in b for b in delivered_bodies))
+
+                # Broken `git status` raises instead of falsely marking tasks complete
+                status_out_val = None
+                with self.assertRaises(_sp.CalledProcessError):
+                    run_fix.publish_fix_results(tmp_pub, changed=True)
 
                 # `run_fix.main()` `fail` mode replaces spinner banners but preserves specific refusal messages
                 patched_fail: list[tuple[str, str]] = []
