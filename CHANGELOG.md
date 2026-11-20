@@ -2,6 +2,14 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.13.0] - 2026-11-19
+
+### Added
+- **Coalesced Parallel `@huggy` / `@pi` Multi-Comment Fix Swarm & Test-Gate Self-Repair (`scripts/prepare_command.py`, `scripts/run_fix.py`, `scripts/post_progress.py`, `action.yml`)**: coalesces all unanswered `@huggy` / `@pi` / `/fix` comments across open PR review threads and comments into a single batch (so multi-comment PR reviews never lose items to GitHub Actions' 1-pending concurrency cap, and duplicate queued runs exit in 0 tokens via `already_handled=true`), merges same-file edits while running disjoint-file fixes concurrently across the Lead + Wingman worker pool (`ThreadPoolExecutor`), runs `setup_cmd` and `verify_cmd` once (with 1 automatic Lead repair pass if `verify_cmd` fails), commits and pushes atomically, and updates + auto-resolves every addressed thread in parallel.
+- **Active Verification Judge (`scripts/run_review.py`, `prompts/judge.md`)**: equips `--phase judge` with read-only repository tools (`read,grep,find,ls`) and an explicit base-branch policy trust boundary so the Judge verifies claims extending beyond the 20-line excerpt against real files and callers before keeping findings.
+- **Zero-DB Living Team Memory (`scripts/fetch_pr_context.py`, `scripts/run_review.py`)**: combines optional `.github/huggy-learnings.md` from `base-tip` with automatic GraphQL mining of recent closed/merged PR review threads where maintainers reacted `👎` or pushed back (*"intentional"*, *"by design"*, *"wontfix"*), feeding `<team_learnings>` to both Finders and Judge.
+- **Mini Codegraph Downstream Caller Map (`scripts/fetch_pr_context.py`)**: extracts modified public/exported declarations from the PR diff and attaches external `file:line` call sites outside the PR diff (`Downstream Callers of Modified Symbols`) into `<pr_context>`.
+
 ## [1.12.3] - 2026-11-16
 
 ### Added

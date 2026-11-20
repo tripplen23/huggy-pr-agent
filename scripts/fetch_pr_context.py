@@ -63,7 +63,8 @@ query($owner: String!, $name: String!, $pr: Int!) {
       comments(last: 30) {
         nodes {
           databaseId
-          author { login }
+          author { __typename login }
+          authorAssociation
           body
           createdAt
         }
@@ -78,10 +79,12 @@ query($owner: String!, $name: String!, $pr: Int!) {
           line
           originalStartLine
           originalLine
-          comments(first: 10) {
+          comments(last: 25) {
             nodes {
               databaseId
-              author { login }
+              author { __typename login }
+              authorAssociation
+              diffHunk
               body
               createdAt
               reactions(content: THUMBS_DOWN) {
@@ -678,6 +681,232 @@ def find_last_reviewed_sha(issue_comments: list[dict]) -> str | None:
     return None
 
 
+LEARNINGS_GQL_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 12, states: [MERGED, CLOSED], orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        reviewThreads(last: 25) {
+          nodes {
+            path
+            comments(first: 6) {
+              nodes {
+                author { __typename login }
+                authorAssociation
+                body
+                reactions(content: THUMBS_DOWN) {
+                  totalCount
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+PUSHBACK_CUE_RE = re.compile(
+    r"\b(?:intentional(?:ly)?|by design|expected(?:\s+behavio(?:u)?r)?|not a bug|false positive|"
+    r"wontfix|won't fix|we intentionally|deliberate(?:ly)?|this is fine|already handled|already guarded)\b"
+    r"|cố tình|chủ đích|không phải lỗi|không cần",
+    re.IGNORECASE,
+)
+FIXED_ACK_RE = re.compile(r"^(?:fixed\s+in\b|pushed\s+`|addressed\s+in\b|done\b)", re.IGNORECASE)
+CHANGED_SYMBOL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]{3,})\b"),
+    re.compile(r"^\s*export\s+(?:interface|type|class|enum|const)\s+([A-Za-z_][A-Za-z0-9_]{3,})\b"),
+    re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]{3,})\s*\("),
+    re.compile(r"^\s*func\s+(?:\([^)]+\)\s*)?([A-Z][A-Za-z0-9_]{3,})\s*\("),
+    re.compile(r"^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]{3,})\b"),
+)
+SKIP_SYMBOL_NAMES = {
+    "main", "test", "init", "setup", "default", "index", "config", "options", "props", "state",
+}
+
+
+def extract_changed_symbols(diff_text: str, max_symbols: int = 12) -> list[tuple[str, str]]:
+    """Return `[(symbol_name, defining_path)]` for public/exported declarations modified in `diff_text`."""
+    if not diff_text:
+        return []
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    cur_path = ""
+    for raw in diff_text.splitlines():
+        if raw.startswith("+++ b/"):
+            cur_path = raw[6:].strip()
+            continue
+        if not cur_path or IGNORED_RE.search(cur_path) or "/test" in cur_path or cur_path.startswith("test"):
+            continue
+        if len(raw) < 2 or raw[0] not in ("+", "-") or raw.startswith(("+++", "---")):
+            continue
+        code = raw[1:]
+        for pat in CHANGED_SYMBOL_PATTERNS:
+            m = pat.match(code)
+            if not m:
+                continue
+            sym = m.group(1)
+            if sym.lower() in SKIP_SYMBOL_NAMES or sym in seen:
+                continue
+            seen.add(sym)
+            found.append((sym, cur_path))
+            if len(found) >= max_symbols:
+                return found
+    return found
+
+
+def build_downstream_caller_map(
+    diff_text: str,
+    changed_paths: list[str],
+    worktree_root: str = ".",
+    max_callers_per_symbol: int = 5,
+) -> str:
+    """Locate external `file:line` references outside `changed_paths` for modified declarations."""
+    symbols = extract_changed_symbols(diff_text)
+    if not symbols:
+        return ""
+    changed_set = set(changed_paths)
+    sym_names = [s for s, _ in symbols]
+    alt = "|".join(re.escape(s) for s in sym_names)
+    raw_out = ""
+    for cmd in (
+        ["rg", "-n", "--no-heading", "--color", "never", "-m", "12", f"\\b(?:{alt})\\b", "."],
+        ["git", "grep", "-n", "-E", f"\\b({alt})\\b"],
+        ["grep", "-rnE", f"\\b({alt})\\b", "."],
+    ):
+        try:
+            res = subprocess.run(
+                cmd,
+                cwd=worktree_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if res.returncode in (0, 1):
+                raw_out = res.stdout or ""
+                break
+        except FileNotFoundError:
+            continue
+        except Exception:
+            return ""
+    if not raw_out.strip():
+        return ""
+
+    hits_by_sym: dict[str, list[str]] = {s: [] for s in sym_names}
+    sym_regexes = {s: re.compile(rf"\b{re.escape(s)}\b") for s in sym_names}
+    for ln in raw_out.splitlines():
+        parts = ln.split(":", 2)
+        if len(parts) < 3:
+            continue
+        rel_path = parts[0][2:] if parts[0].startswith("./") else parts[0]
+        line_no, snippet = parts[1], parts[2].strip()
+        if rel_path in changed_set or IGNORED_RE.search(rel_path) or rel_path.startswith(".git/"):
+            continue
+        for s, s_re in sym_regexes.items():
+            if len(hits_by_sym[s]) >= max_callers_per_symbol:
+                continue
+            if s_re.search(snippet):
+                hits_by_sym[s].append(f"`{rel_path}:{line_no}` (`{snippet[:90]}`)")
+
+    lines: list[str] = []
+    for sym, def_path in symbols:
+        refs = hits_by_sym.get(sym) or []
+        if refs:
+            lines.append(f"- **`{sym}`** (modified in `{def_path}`) → external callers: " + ", ".join(refs))
+    return "\n".join(lines)[:2800]
+
+
+def extract_team_learnings_from_prs(pr_nodes: list[dict], current_pr: int | None = None, max_items: int = 12) -> list[str]:
+    """Extract concise team learnings from closed/merged PR Huggy threads that received 👎 or maintainer pushback."""
+    items: list[str] = []
+    seen_titles: set[str] = set()
+    for pr_node in pr_nodes or []:
+        if not pr_node or pr_node.get("number") == current_pr:
+            continue
+        pr_num = pr_node.get("number")
+        threads = ((pr_node.get("reviewThreads") or {}).get("nodes")) or []
+        for t in threads:
+            if not t:
+                continue
+            c_nodes = [c for c in (((t.get("comments") or {}).get("nodes")) or []) if c]
+            if not c_nodes:
+                continue
+            first = c_nodes[0]
+            first_body = (first.get("body") or "").strip()
+            if not first_body.startswith("<!-- pi"):
+                continue
+            downvotes = int(((first.get("reactions") or {}).get("totalCount")) or 0)
+            human_pushback = ""
+            for reply in c_nodes[1:]:
+                r_author = (reply.get("author") or {})
+                r_login = (r_author.get("login") or "").lower()
+                if r_author.get("__typename") == "Bot" or r_login.endswith("[bot]") or r_login == "github-actions":
+                    continue
+                r_assoc = (reply.get("authorAssociation") or "").upper()
+                if r_assoc and r_assoc not in {"OWNER", "MEMBER", "COLLABORATOR"}:
+                    continue
+                r_body = clean_body(reply.get("body") or "", limit=220).strip()
+                if not r_body or FIXED_ACK_RE.match(r_body) or r_body.startswith(("@huggy", "@pi", "/")):
+                    continue
+                if PUSHBACK_CUE_RE.search(r_body):
+                    human_pushback = f"@{r_author.get('login')}: {r_body}"
+                    break
+            if downvotes <= 0 and not human_pushback:
+                continue
+            cleaned_finding = clean_body(first_body, limit=180).splitlines()
+            finding_head = next((ln.strip() for ln in cleaned_finding if ln.strip()), "")[:140]
+            dedupe_key = re.sub(r"[^a-z0-9]+", " ", finding_head.lower()).strip()[:60]
+            if not dedupe_key or dedupe_key in seen_titles:
+                continue
+            seen_titles.add(dedupe_key)
+            path = t.get("path") or "repo"
+            note = human_pushback if human_pushback else "Maintainer reacted 👎 (dismissed as noise/unwanted)"
+            items.append(f"- `PR #{pr_num}` (`{path}`): {finding_head} → **{note}**")
+            if len(items) >= max_items:
+                return items
+    return items
+
+
+def fetch_repo_team_learnings(
+    owner: str,
+    name: str,
+    token: str,
+    current_pr: int | None = None,
+    base_ref: str | None = None,
+) -> str:
+    """Combine `.github/huggy-learnings.md` (from trusted base) with mined PR pushback learnings."""
+    sections: list[str] = []
+    pinned_doc = load_base_git_file(".github/huggy-learnings.md", base_ref=base_ref).strip()
+    if pinned_doc:
+        sections.append(pinned_doc[:4000])
+    if owner and name and token:
+        try:
+            payload = json.dumps({"query": LEARNINGS_GQL_QUERY, "variables": {"owner": owner, "name": name}}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.github.com/graphql",
+                data=payload,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "huggy-pr-agent",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+            pr_nodes = ((((raw.get("data") or {}).get("repository") or {}).get("pullRequests") or {}).get("nodes")) or []
+            mined = extract_team_learnings_from_prs(pr_nodes, current_pr=current_pr)
+            if mined:
+                sections.append("\n".join(mined))
+        except Exception as exc:
+            sys.stderr.write(f"warning: could not mine team learnings ({exc}); continuing\n")
+    return "\n\n".join(sections).strip()
+
+
 def format_pr_context(
     data: dict,
     comment_id: int | None = None,
@@ -693,6 +922,8 @@ def format_pr_context(
     failed_ci_logs: str = "",
     extra_direct_issues: list[dict] | None = None,
     blast_radius: dict[str, int] | None = None,
+    team_learnings: str = "",
+    symbol_callers: str = "",
 ) -> str:
     pr = (((data.get("data") or {}).get("repository") or {}).get("pullRequest")) or {}
     if not pr:
@@ -799,6 +1030,24 @@ def format_pr_context(
             "These path-specific rules from the base branch apply to the files changed in this review:",
             "",
             scoped_rules_md.strip(),
+        ]
+
+    if team_learnings.strip():
+        out += [
+            "",
+            "### Team Review Learnings & Past Pushback (Living Memory)",
+            "Respect these repository-specific conventions and prior maintainer pushback so you do not repeat unwanted noise (still report genuine High/Medium bugs or security flaws):",
+            "",
+            team_learnings.strip(),
+        ]
+
+    if symbol_callers.strip():
+        out += [
+            "",
+            "### Downstream Callers of Modified Symbols (Mini Codegraph)",
+            "These files outside the PR diff reference declarations modified in this PR — inspect any caller whose contract, arguments, or return assumptions could break:",
+            "",
+            symbol_callers.strip(),
         ]
 
     if body:
@@ -1090,6 +1339,9 @@ def main() -> int:
     with open(scoped_rules_path, "w", encoding="utf-8") as sfh:
         sfh.write(scoped_rules_md)
 
+    symbol_callers = build_downstream_caller_map(diff_text, changed_paths)
+    team_learnings = fetch_repo_team_learnings(owner, name, token, current_pr=pr, base_ref=trusted_ref)
+
     data: dict = {}
     last_sha: str | None = None
     inc_diff = ""
@@ -1127,6 +1379,8 @@ def main() -> int:
             scoped_rules_md=scoped_rules_md,
             failed_ci_logs=failed_ci_logs,
             extra_direct_issues=extra_direct_issues,
+            team_learnings=team_learnings,
+            symbol_callers=symbol_callers,
         )
     except Exception as exc:
         sys.stderr.write(f"warning: could not fetch PR context ({exc}); continuing without it\n")
@@ -1142,6 +1396,8 @@ def main() -> int:
                 "failed_ci_logs": failed_ci_logs,
                 "extra_direct_issues": extra_direct_issues,
                 "has_deep_label": has_deep_review_label(data),
+                "team_learnings": team_learnings,
+                "symbol_callers": symbol_callers,
             },
             mfh,
         )

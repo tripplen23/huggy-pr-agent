@@ -718,10 +718,21 @@ def build_judge_input(
     gql_data: dict | None = None,
     scoped_rules_md: str = "",
     worktree_root: str = ".",
+    team_learnings: str = "",
 ) -> str:
     blocks = [judge_prompt.strip()]
     if scoped_rules_md.strip():
         blocks.extend(["", "## Path-Scoped Repository Rules (from `base` branch)", "", scoped_rules_md.strip()])
+    if team_learnings.strip():
+        blocks.extend(
+            [
+                "",
+                "## Team Review Learnings & Past Pushback (Living Memory)",
+                "Drop non-critical / preference repeats that conflict with prior maintainer pushback below (never suppress concrete High/Medium runtime bugs or security flaws):",
+                "",
+                team_learnings.strip(),
+            ]
+        )
     resolved_summary = extract_resolved_threads_summary(gql_data or {})
     if resolved_summary:
         blocks.extend(["", "## Previously Resolved Threads on This PR", "", *resolved_summary])
@@ -898,7 +909,11 @@ def main() -> int:
         cand_paths = list(dict.fromkeys(c["path"] for c in cands))
         judge_rules = fetch_pr_context.collect_scoped_rules(cand_paths) or scoped_rules_md
         judge_input = build_judge_input(
-            cands, judge_prompt, gql_data=meta.get("graphql"), scoped_rules_md=judge_rules
+            cands,
+            judge_prompt,
+            gql_data=meta.get("graphql"),
+            scoped_rules_md=judge_rules,
+            team_learnings=meta.get("team_learnings") or "",
         )
         judge_models = list(
             dict.fromkeys(m for m in (primary_model, primary_model, wingman_model, fallback_model) if m)
@@ -906,13 +921,14 @@ def main() -> int:
         # Keep unique models while allowing one retry on primary before fallback
         if len(judge_models) == 1:
             judge_models = [judge_models[0], judge_models[0]]
+        judge_tools = (os.environ.get("PI_JUDGE_TOOLS") or "read,grep,find,ls").strip()
         judge_raw = invoke_pi(
             prompt_text=judge_input,
             model_candidates=judge_models,
             thinking="low",
-            tools_arg="none",
+            tools_arg=judge_tools,
             rubric_path=rubric_path,
-            attempt_timeout_sec=180,
+            attempt_timeout_sec=240,
             deadline_monotonic=deadline_mono,
             label="judge",
             require_decisions_json=True,
@@ -1025,6 +1041,8 @@ def main() -> int:
             failed_ci_logs=failed_ci_logs,
             extra_direct_issues=extra_direct_issues,
             blast_radius=blast_radius,
+            team_learnings=meta.get("team_learnings") or "",
+            symbol_callers=meta.get("symbol_callers") or "",
         )
         include_desc = len(bundles) == 1 and lens_name in ("standard", "logic")
         t_template = brief_template if include_desc else strip_pr_description_section(brief_template)

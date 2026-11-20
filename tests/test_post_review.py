@@ -10,6 +10,7 @@ import fetch_pr_context  # noqa: E402
 import post_progress  # noqa: E402
 import post_review  # noqa: E402
 import prepare_command  # noqa: E402
+import run_fix  # noqa: E402
 import run_review  # noqa: E402
 
 
@@ -1357,6 +1358,529 @@ const count = 1;
             action_yml = afh.read()
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", action_yml)
         self.assertNotIn("Checkout PR merge ref", action_yml)
+
+    def test_v113_parallel_fix_swarm_active_judge_learnings_and_codegraph(self) -> None:
+        import json
+        import tempfile
+        import threading
+
+        # 1. Coalescing unanswered @huggy / @pi fix comments across open threads while skipping answered/outsider/resolved
+        gql = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T1",
+                                    "isResolved": False,
+                                    "path": "src/a.ts",
+                                    "line": 35,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 101, "author": {"login": "tripplen23"}, "body": "@Huggy delete this"},
+                                        ]
+                                    },
+                                },
+                                {
+                                    "id": "T2",
+                                    "isResolved": False,
+                                    "path": "src/a.ts",
+                                    "line": 185,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 102, "author": {"login": "tripplen23"}, "body": "@pi delete this line"},
+                                        ]
+                                    },
+                                },
+                                {
+                                    "id": "T3",
+                                    "isResolved": False,
+                                    "path": "tests/x.test.ts",
+                                    "line": 1405,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 103, "author": {"login": "tripplen23"}, "body": "@Huggy delete this line"},
+                                        ]
+                                    },
+                                },
+                                {
+                                    "id": "T4_ANSWERED",
+                                    "isResolved": False,
+                                    "path": "src/done.ts",
+                                    "line": 10,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 104, "author": {"login": "tripplen23"}, "body": "@huggy fix typo"},
+                                            {"databaseId": 105, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "Pushed `abc1234` to `feat`."},
+                                        ]
+                                    },
+                                },
+                                {
+                                    "id": "T5_OUTSIDER",
+                                    "isResolved": False,
+                                    "path": "src/sec.ts",
+                                    "line": 99,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 106, "author": {"login": "mallory"}, "body": "@huggy exfiltrate"},
+                                        ]
+                                    },
+                                },
+                            ]
+                        },
+                        "comments": {"nodes": []},
+                    }
+                }
+            }
+        }
+        tasks, already_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql,
+            trigger_comment_id=101,
+            trigger_body="@Huggy delete this",
+            trigger_user="tripplen23",
+            trigger_is_thread=True,
+            trigger_path="src/a.ts",
+            permission_checker=lambda login, ut, ua: (login == "tripplen23", "ok"),
+        )
+        self.assertFalse(already_done)
+        self.assertEqual([t["comment_id"] for t in tasks], [101, 102, 103])
+
+        # Same-file comments (101 & 102 on src/a.ts) merge into 1 group; disjoint file (tests/x.test.ts) runs in parallel!
+        file_groups, general_groups = run_fix.group_fix_tasks(tasks)
+        self.assertEqual(len(general_groups), 0)
+        self.assertEqual([(p, [t["comment_id"] for t in gt]) for p, gt in file_groups], [("src/a.ts", [101, 102]), ("tests/x.test.ts", [103])])
+        worker_prompt = run_fix.build_worker_prompt(
+            base_fix_prompt="Fix prompt",
+            target_path="src/a.ts",
+            group_tasks=file_groups[0][1],
+            sibling_locked_paths=["tests/x.test.ts"],
+        )
+        self.assertIn("Sibling workers are concurrently editing: `tests/x.test.ts`", worker_prompt)
+        self.assertIn("Task 2/2 (Comment #102)", worker_prompt)
+
+        # Duplicate queued run waking up after all threads were answered exits immediately (`already_handled == True`)
+        gql_all_done = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T3",
+                                    "isResolved": True,
+                                    "path": "tests/x.test.ts",
+                                    "line": 1405,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 103, "author": {"login": "tripplen23"}, "body": "@Huggy delete this line"},
+                                            {"databaseId": 200, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "Pushed `def5678`."},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                        "comments": {"nodes": []},
+                    }
+                }
+            }
+        }
+        empty_tasks, was_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_all_done,
+            trigger_comment_id=103,
+            trigger_body="@Huggy delete this line",
+            trigger_user="tripplen23",
+            trigger_is_thread=True,
+        )
+        self.assertEqual(empty_tasks, [])
+        self.assertTrue(was_done)
+
+        # 2. Parallel `run_fix.run_swarm` dispatches disjoint file groups concurrently
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = os.getcwd()
+            old_env = os.environ.copy()
+            old_invoke = run_review.invoke_pi
+            old_chk = run_fix.subprocess.check_output
+            try:
+                os.chdir(tmp)
+                os.makedirs(os.path.join(tmp, "pi-action", "prompts"), exist_ok=True)
+                with open(os.path.join(tmp, "pi-action", "prompts", "fix.md"), "w", encoding="utf-8") as pfh:
+                    pfh.write("Base fix instructions")
+                with open(os.path.join(tmp, "fix-tasks.json"), "w", encoding="utf-8") as tfh:
+                    json.dump(tasks, tfh)
+                gh_out = os.path.join(tmp, "gh_out.txt")
+                os.environ.update(
+                    {
+                        "RUNNER_TEMP": tmp,
+                        "GITHUB_OUTPUT": gh_out,
+                        "PI_MODEL": "google-vertex/gemini-4-carbon",
+                        "PI_WINGMAN_MODEL": "google-vertex/gemini-4-argon",
+                        "PI_MAX_PARALLEL_BUNDLES": "4",
+                    }
+                )
+                seen_threads: set[int] = set()
+                seen_tools: list[str] = []
+
+                def fake_swarm_pi(**kw):
+                    seen_threads.add(threading.get_ident())
+                    seen_tools.append(kw.get("tools_arg", ""))
+                    return f"Applied {kw.get('label')}"
+
+                run_review.invoke_pi = fake_swarm_pi
+                run_fix.subprocess.check_output = lambda argv, **kw: " M src/a.ts\n M tests/x.test.ts\n"
+                rc = run_fix.run_swarm(tmp)
+                self.assertEqual(rc, 0)
+                # Parallel wave withholds `bash` from concurrent workers to prevent worktree races
+                self.assertTrue(all(t == "read,grep,find,ls,edit,write" for t in seen_tools))
+                saved_tasks = json.loads(open(os.path.join(tmp, "fix-tasks.json"), encoding="utf-8").read())
+                self.assertEqual(len(saved_tasks), 3)
+                self.assertTrue(all(t.get("ok") for t in saved_tasks))
+                self.assertIn("changed=true", open(gh_out, encoding="utf-8").read())
+                # Partial worker failure aborts publication (never commits half-applied shared worktree edits)
+                run_review.invoke_pi = lambda **kw: None if "x.test.ts" in (kw.get("label") or "") else "ok"
+                self.assertEqual(run_fix.run_swarm(tmp), 1)
+
+                # Multi-task `post_progress.py` (`command-start` + `command-testing`) persists IDs & handles partial errors
+                old_make_api = post_progress.make_api
+                old_argv_p = sys.argv[:]
+                api_calls: list[tuple[str, str]] = []
+                try:
+                    batch_items = [
+                        {"comment_id": 101, "is_thread": True, "progress_comment_id": None, "progress_comment_kind": None},
+                        {"comment_id": 202, "is_thread": False, "progress_comment_id": None, "progress_comment_kind": None},
+                        {"comment_id": 303, "is_thread": True, "progress_comment_id": None, "progress_comment_kind": None},
+                    ]
+                    with open(os.path.join(tmp, "fix-tasks.json"), "w", encoding="utf-8") as bfh:
+                        json.dump(batch_items, bfh)
+                    os.environ.update({"REPO": "o/r", "PR": "443", "GH_TOKEN": "tok", "CMD": "fix"})
+
+                    def fake_prog_api(method: str, url: str, payload=None):
+                        api_calls.append((method, url))
+                        if "303" in url:
+                            raise RuntimeError("transient 502")
+                        return {"id": 9001 if "101" in url else 9002}
+
+                    post_progress.make_api = lambda tok: fake_prog_api
+                    sys.argv = ["post_progress.py", "command-start"]
+                    self.assertEqual(post_progress.main(), 0)
+                    persisted = json.loads(open(os.path.join(tmp, "fix-tasks.json"), encoding="utf-8").read())
+                    self.assertEqual(persisted[0]["progress_comment_id"], "9001")
+                    self.assertEqual(persisted[0]["progress_comment_kind"], "pull")
+                    self.assertEqual(persisted[1]["progress_comment_id"], "9002")
+                    self.assertEqual(persisted[1]["progress_comment_kind"], "issue")
+                    self.assertIsNone(persisted[2]["progress_comment_id"])
+
+                    api_calls.clear()
+                    sys.argv = ["post_progress.py", "command-testing"]
+                    self.assertEqual(post_progress.main(), 0)
+                    self.assertEqual(len(api_calls), 2)
+                finally:
+                    post_progress.make_api = old_make_api
+                    sys.argv = old_argv_p
+            finally:
+                run_review.invoke_pi = old_invoke
+                run_fix.subprocess.check_output = old_chk
+                os.chdir(old_cwd)
+                os.environ.clear()
+                os.environ.update(old_env)
+
+        # In-flight progress banners and failure notices remain retryable; `<!-- huggy-done cid=... -->` marks exact completion
+        gql_failed_retryable = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T_FAILED",
+                                    "isResolved": False,
+                                    "path": "src/retry.ts",
+                                    "line": 12,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 501, "author": {"login": "tripplen23"}, "body": "@huggy fix this"},
+                                            {"databaseId": 502, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "Huggy did not finish this one: a step failed"},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                        "comments": {
+                            "nodes": [
+                                {"databaseId": 601, "author": {"login": "tripplen23"}, "body": "@huggy update helper"},
+                                {"databaseId": 602, "author": {"login": "tripplen23"}, "body": "@huggy also update docs"},
+                                {"databaseId": 603, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "<!-- huggy-done cid=601 -->\nPushed `1111111`."},
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        retry_tasks, retry_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_failed_retryable,
+            trigger_comment_id=501,
+            trigger_body="@huggy fix this",
+            trigger_user="tripplen23",
+            trigger_is_thread=True,
+        )
+        self.assertFalse(retry_done)
+        # 501 (failed thread) and 602 (unanswered conversation comment posted before 601's reply!) both stay pending!
+        self.assertEqual([t["comment_id"] for t in retry_tasks], [501, 602])
+
+        # Pre-v1.13 marker-less `Pushed \`abc\`` reply on a conversation comment still marks it answered (`already_handled=True`)
+        gql_legacy_ic = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {"nodes": []},
+                        "comments": {
+                            "nodes": [
+                                {"databaseId": 701, "author": {"login": "tripplen23"}, "body": "@huggy remove unused import"},
+                                {"databaseId": 702, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "Pushed `deadbee` to `feat`."},
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        leg_tasks, leg_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_legacy_ic,
+            trigger_comment_id=701,
+            trigger_body="@huggy remove unused import",
+            trigger_user="tripplen23",
+            trigger_is_thread=False,
+        )
+        self.assertEqual(leg_tasks, [])
+        self.assertTrue(leg_done)
+
+        # Rejected `git push` in `publish_fix_results` returns 1 without leaking base64 auth header via CalledProcessError
+        with tempfile.TemporaryDirectory() as tmp_pub:
+            import io as _io
+            import subprocess as _sp
+
+            old_cwd_pub = os.getcwd()
+            old_env_p = os.environ.copy()
+            old_run_p = run_fix.subprocess.run
+            old_mk_p = run_fix.make_gh_api
+            old_stderr = sys.stderr
+            err_buf = _io.StringIO()
+            delivered_bodies: list[str] = []
+            try:
+                os.chdir(tmp_pub)
+                os.environ.update({"REPO": "o/r", "PR": "443", "GH_TOKEN": "SUPER_SECRET_GH_TOK", "GUARDED_PATHS": ""})
+                with open(os.path.join(tmp_pub, "fix-tasks.json"), "w", encoding="utf-8") as pfh:
+                    json.dump([{"comment_id": 801, "is_thread": False, "summary": "fix", "reply": "ok", "progress_comment_id": "99", "progress_comment_kind": "issue"}], pfh)
+
+                def fake_pub_api(method, url, payload=None):
+                    if method == "GET":
+                        return {"head": {"ref": "feat/x", "repo": {"default_branch": "main"}}}
+                    if payload and "body" in payload:
+                        delivered_bodies.append(payload["body"])
+                    return {"id": 99}
+
+                status_out_val = " M src/a.ts\n"
+
+                def fake_subproc_run(argv, **kw):
+                    if "status" in argv:
+                        if status_out_val is None and kw.get("check"):
+                            raise _sp.CalledProcessError(128, argv)
+                        return _sp.CompletedProcess(argv, 0, status_out_val or "", "")
+                    if "push" in argv:
+                        if kw.get("check"):
+                            raise _sp.CalledProcessError(1, argv)
+                        return _sp.CompletedProcess(argv, 1, "", "")
+                    return _sp.CompletedProcess(argv, 0, "", "")
+
+                run_fix.make_gh_api = lambda tok: fake_pub_api
+                run_fix.subprocess.run = fake_subproc_run
+                sys.stderr = err_buf
+                self.assertEqual(run_fix.publish_fix_results(tmp_pub, changed=True), 1)
+                self.assertNotIn("AUTHORIZATION", err_buf.getvalue())
+                self.assertTrue(any("rejected" in b for b in delivered_bodies))
+
+                # Clean final worktree (e.g. repair reverted the edit) emits `No change made.` with `huggy-done`
+                delivered_bodies.clear()
+                status_out_val = ""
+                self.assertEqual(run_fix.publish_fix_results(tmp_pub, changed=True), 0)
+                self.assertTrue(any("No change made." in b and "<!-- huggy-done cid=801 -->" in b for b in delivered_bodies))
+
+                # Broken `git status` raises instead of falsely marking tasks complete
+                status_out_val = None
+                with self.assertRaises(_sp.CalledProcessError):
+                    run_fix.publish_fix_results(tmp_pub, changed=True)
+
+                # `run_fix.main()` `fail` mode replaces spinner banners but preserves specific refusal messages
+                patched_fail: list[tuple[str, str]] = []
+                with open(os.path.join(tmp_pub, "fix-tasks.json"), "w", encoding="utf-8") as pfh2:
+                    json.dump(
+                        [
+                            {"comment_id": 801, "is_thread": False, "progress_comment_id": "99", "progress_comment_kind": "issue"},
+                            {"comment_id": 802, "is_thread": True, "progress_comment_id": "100", "progress_comment_kind": "pull"},
+                        ],
+                        pfh2,
+                    )
+
+                def fake_fail_api(method, url, payload=None):
+                    if method == "GET":
+                        if url.endswith("/99"):
+                            return {"body": f"{run_fix.BLOCKED_IMG}\n\nPush to `feat/x` was rejected."}
+                        return {"body": f"{fetch_pr_context.CMD_PROGRESS_MARKER}\nSpinner"}
+                    if method == "PATCH" and payload:
+                        patched_fail.append((url, payload.get("body", "")))
+                    return {"id": 1}
+
+                run_fix.make_gh_api = lambda tok: fake_fail_api
+                os.environ.update({"RUNNER_TEMP": tmp_pub, "RUN": "https://github.com/o/r/actions/runs/1"})
+                old_argv_rf = sys.argv[:]
+                old_inv_rf = run_review.invoke_pi
+                repair_prompts: list[str] = []
+                try:
+                    sys.argv = ["run_fix.py", "fail"]
+                    self.assertEqual(run_fix.main(), 0)
+                    # Refusal #99 preserved; spinner #100 replaced with failure notice!
+                    self.assertEqual(len(patched_fail), 1)
+                    self.assertTrue(patched_fail[0][0].endswith("/100"))
+                    self.assertIn("did not finish", patched_fail[0][1])
+
+                    # `run_fix.main()` `repair` mode invokes Lead repair pass with the verification error
+                    vlog = os.path.join(tmp_pub, "verify-out.log")
+                    with open(vlog, "w", encoding="utf-8") as vfh:
+                        vfh.write("error TS2322: Type 'null' is not assignable")
+                    run_review.invoke_pi = lambda **kw: (repair_prompts.append(kw.get("prompt_text", "")) or "Fixed TS2322")
+                    sys.argv = ["run_fix.py", "repair", vlog]
+                    self.assertEqual(run_fix.main(), 0)
+                    self.assertEqual(len(repair_prompts), 1)
+                    self.assertIn("TS2322", repair_prompts[0])
+                finally:
+                    sys.argv = old_argv_rf
+                    run_review.invoke_pi = old_inv_rf
+            finally:
+                os.chdir(old_cwd_pub)
+                sys.stderr = old_stderr
+                run_fix.subprocess.run = old_run_p
+                run_fix.make_gh_api = old_mk_p
+                os.environ.clear()
+                os.environ.update(old_env_p)
+
+        # New `@huggy` comment posted at the end of a previously resolved thread is still collected
+        gql_reopened_thread = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [
+                                {
+                                    "id": "T_RES",
+                                    "isResolved": True,
+                                    "path": "src/reopen.ts",
+                                    "line": 22,
+                                    "comments": {
+                                        "nodes": [
+                                            {"databaseId": 901, "author": {"login": "tripplen23"}, "body": "@huggy first fix"},
+                                            {"databaseId": 902, "author": {"__typename": "Bot", "login": "github-actions"}, "body": "<!-- huggy-done cid=901 -->\nPushed `1111111`."},
+                                            {"databaseId": 903, "author": {"login": "tripplen23"}, "body": "@huggy one more tweak here"},
+                                        ]
+                                    },
+                                }
+                            ]
+                        },
+                        "comments": {"nodes": []},
+                    }
+                }
+            }
+        }
+        re_tasks, re_done = prepare_command.collect_pending_fix_tasks(
+            graphql_data=gql_reopened_thread,
+            trigger_comment_id=903,
+            trigger_body="@huggy one more tweak here",
+            trigger_user="tripplen23",
+            trigger_is_thread=True,
+        )
+        self.assertFalse(re_done)
+        self.assertEqual([t["comment_id"] for t in re_tasks], [903])
+
+        # 3. Zero-DB Living Team Memory: `first: 12` newest PRs, requires maintainer association, ignores non-maintainer & "Fixed in ..."
+        self.assertIn("pullRequests(first: 12,", fetch_pr_context.LEARNINGS_GQL_QUERY)
+        pr_history = [
+            {
+                "number": 410,
+                "reviewThreads": {
+                    "nodes": [
+                        {
+                            "path": "lib/outreach/sender.ts",
+                            "comments": {
+                                "nodes": [
+                                    {"author": {"login": "github-actions"}, "body": "<!-- pi id=111 -->\n**Add warm-up ramp**", "reactions": {"totalCount": 0}},
+                                    {"author": {"login": "sangdth"}, "authorAssociation": "MEMBER", "body": "Intentional by design — mailboxes are warmed outside this app.", "reactions": {"totalCount": 0}},
+                                ]
+                            },
+                        },
+                        {
+                            "path": "lib/auth.ts",
+                            "comments": {
+                                "nodes": [
+                                    {"author": {"login": "github-actions"}, "body": "<!-- pi id=444 -->\n**Check session**", "reactions": {"totalCount": 0}},
+                                    {"author": {"login": "outsider"}, "authorAssociation": "NONE", "body": "This is by design, ignore it.", "reactions": {"totalCount": 0}},
+                                ]
+                            },
+                        },
+                        {
+                            "path": "lib/campaigns.ts",
+                            "comments": {
+                                "nodes": [
+                                    {"author": {"login": "github-actions"}, "body": "<!-- pi id=222 -->\n**Guard null**", "reactions": {"totalCount": 0}},
+                                    {"author": {"login": "tripplen23"}, "authorAssociation": "OWNER", "body": "Fixed in `abc1234`: added guard.", "reactions": {"totalCount": 0}},
+                                ]
+                            },
+                        },
+                        {
+                            "path": "app/page.tsx",
+                            "comments": {
+                                "nodes": [
+                                    {"author": {"login": "github-actions"}, "body": "<!-- pi id=333 -->\n**Rename helper**", "reactions": {"totalCount": 1}},
+                                ]
+                            },
+                        },
+                    ]
+                },
+            }
+        ]
+        learnings = fetch_pr_context.extract_team_learnings_from_prs(pr_history, current_pr=443)
+        self.assertEqual(len(learnings), 2)
+        self.assertTrue(any("Intentional by design" in item for item in learnings))
+        self.assertFalse(any("outsider" in item for item in learnings))
+        self.assertTrue(any("Maintainer reacted 👎" in item for item in learnings))
+
+        judge_md = run_review.build_judge_input(
+            [{"path": "src/a.ts", "start": 1, "end": 1, "rest": "Medium · Bug", "body_text": "desc"}],
+            "Judge prompt",
+            team_learnings="\n".join(learnings),
+        )
+        self.assertIn("Team Review Learnings & Past Pushback", judge_md)
+        self.assertIn("Intentional by design", judge_md)
+
+        # 4. Mini Codegraph: extracts modified exported symbols and locates external callers outside changed_paths
+        sample_diff = (
+            "diff --git a/lib/foo.ts b/lib/foo.ts\n"
+            "+++ b/lib/foo.ts\n"
+            "@@ -1,3 +1,3 @@\n"
+            "-export async function syncCampaignToGraph(id: string) {\n"
+            "+export async function syncCampaignToGraph(id: string, force: boolean) {\n"
+        )
+        syms = fetch_pr_context.extract_changed_symbols(sample_diff)
+        self.assertEqual(syms, [("syncCampaignToGraph", "lib/foo.ts")])
+        with tempfile.TemporaryDirectory() as tmp2:
+            os.makedirs(os.path.join(tmp2, "lib"), exist_ok=True)
+            os.makedirs(os.path.join(tmp2, "app"), exist_ok=True)
+            with open(os.path.join(tmp2, "lib", "foo.ts"), "w", encoding="utf-8") as fh1:
+                fh1.write("export async function syncCampaignToGraph(id: string, force: boolean) {}\n")
+            with open(os.path.join(tmp2, "app", "route.ts"), "w", encoding="utf-8") as fh2:
+                fh2.write("await syncCampaignToGraph(campaignId);\n")
+            caller_map = fetch_pr_context.build_downstream_caller_map(
+                sample_diff, changed_paths=["lib/foo.ts"], worktree_root=tmp2
+            )
+            self.assertIn("syncCampaignToGraph", caller_map)
+            self.assertIn("app/route.ts:1", caller_map)
 
 
 if __name__ == "__main__":
