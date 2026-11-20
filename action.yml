@@ -318,6 +318,7 @@ runs:
         fi
         GIT_ATTR_SOURCE=base-tip git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
         python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
+        rm -f review.md
 
     - name: Replace a stale verdict when review fails
       if: failure() && steps.gate_review.outputs.go == 'true'
@@ -328,6 +329,7 @@ runs:
         PR: ${{ github.event.pull_request.number }}
       run: |
         set -euo pipefail
+        rm -f review.md
         auth="Authorization: Bearer $GH_TOKEN"
         api="https://api.github.com/repos/$REPO/issues"
         comments=$(curl -fsSL -H "$auth" "$api/$PR/comments?per_page=100")
@@ -407,10 +409,14 @@ runs:
         fi
 
         git init -q .
+        git reset --hard -q 2>/dev/null || true
+        git clean -ffd -q 2>/dev/null || true
         git -c "http.$SERVER/.extraheader=AUTHORIZATION: basic $git_basic" \
           fetch -q --no-tags "$SERVER/$REPO.git" \
-          "+refs/pull/$PR/head:refs/heads/pr-head" "+refs/heads/$base:refs/heads/base-tip"
-        git checkout -q pr-head
+          "+refs/pull/$PR/head:refs/remotes/pr-head" "+refs/heads/$base:refs/remotes/base-tip"
+        git checkout -f -q -B pr-head refs/remotes/pr-head
+        git branch -f base-tip refs/remotes/base-tip
+        git clean -ffd -q
         mb=$(git merge-base base-tip pr-head 2>/dev/null || git rev-parse base-tip)
         git branch -f base "$mb"
 
@@ -687,6 +693,7 @@ runs:
           export HEAD_SHA="$(git rev-parse HEAD)"
           GIT_ATTR_SOURCE=base-tip git -c core.quotePath=false diff base HEAD > "$RUNNER_TEMP/diff.patch"
           python3 "$RUNNER_TEMP/pi-action/scripts/post_review.py"
+          rm -f review.md
           exit 0
         fi
 

@@ -1358,6 +1358,9 @@ const count = 1;
             action_yml = afh.read()
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", action_yml)
         self.assertNotIn("Checkout PR merge ref", action_yml)
+        self.assertIn("git clean -ffd -q", action_yml)
+        self.assertIn("git checkout -f -q -B pr-head refs/remotes/pr-head", action_yml)
+        self.assertIn("rm -f review.md", action_yml)
 
     def test_v113_parallel_fix_swarm_active_judge_learnings_and_codegraph(self) -> None:
         import json

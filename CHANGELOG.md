@@ -2,6 +2,11 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.13.1] - 2026-11-20
+
+### Fixed
+- **Clean Persistent Self-Hosted Runner Worktrees Across `review` and `command` Runs (`action.yml`)**: removes untracked `review.md` after `post_review.py` finishes and resets/cleans non-ignored untracked files (`git reset --hard` + `git clean -ffd` while keeping `.gitignore`d caches such as `node_modules` intact) + fetches into `refs/remotes/pr-head` before `git checkout -f -B pr-head` in `command` mode, preventing `error: The following untracked working tree files would be overwritten by checkout: review.md` and `Refusing to fetch into current branch` on persistent multi-slot self-hosted runners.
+
 ## [1.13.0] - 2026-11-19
 
 ### Added
