@@ -1353,11 +1353,21 @@ const count = 1;
         self.assertEqual(len(ok_calls), 1)
         self.assertNotIn("commit_id", ok_calls[0])
 
-        # Action review mode checks out pull_request.head.sha (never the synthetic merge commit)
+        # Action review mode checks out pull_request.head.sha and never writes review.md into the repository worktree
         with open("action.yml", encoding="utf-8") as afh:
             action_yml = afh.read()
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", action_yml)
         self.assertNotIn("Checkout PR merge ref", action_yml)
+        self.assertIn("git clean -ffd -q 2>/dev/null || true", action_yml)
+        self.assertIn(
+            "git checkout -f -q -B pr-head refs/remotes/pr-head\n        git branch -f base-tip refs/remotes/base-tip\n        git clean -ffd -q\n",
+            action_yml,
+        )
+        self.assertNotIn('open("review.md"', action_yml)
+        self.assertNotIn("cp review.md", action_yml)
+        self.assertNotIn('"$RUNNER_TEMP/reply.md" review.md', action_yml)
+        with open("scripts/run_review.py", encoding="utf-8") as rrfh:
+            self.assertNotIn('open("review.md"', rrfh.read())
 
     def test_v113_parallel_fix_swarm_active_judge_learnings_and_codegraph(self) -> None:
         import json

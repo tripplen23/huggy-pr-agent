@@ -2,6 +2,11 @@
 
 All notable changes to `huggy-pr-agent` are documented in this file.
 
+## [1.13.1] - 2026-11-20
+
+### Fixed
+- **Move `review.md` Artifact Out of Repository Worktree & Clean Self-Hosted Runner Slots (`action.yml`, `scripts/run_review.py`, `scripts/post_review.py`)**: writes and reads generated `review.md` exclusively under `$RUNNER_TEMP/review.md` (never inside the repository checkout, protecting repos that track `review.md`/`REVIEW.md` and preventing `git add -A` from staging review artifacts) and cleans non-ignored untracked files (`git clean -ffd` while preserving `.gitignore`d `node_modules`) + fetches into `refs/remotes/pr-head` before `git checkout -f -B pr-head` on persistent multi-slot self-hosted runners.
+
 ## [1.13.0] - 2026-11-19
 
 ### Added
